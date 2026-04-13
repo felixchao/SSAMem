@@ -106,6 +106,12 @@ class PipelineRunResult:
     prompt: str
     output_text: str
     mounted_pointer_ids: list[str]
+    explicit_pointer_ids: list[str] = field(default_factory=list)
+    prefetched_pointer_ids: list[str] = field(default_factory=list)
+    prefetched_scores: list[float] = field(default_factory=list)
+    retrieval_query: str = ""
+    mounted_latent_count: int = 0
+    mounted_latent_tokens: int = 0
 
 
 @dataclass
@@ -115,6 +121,12 @@ class MASTurn:
     prompt: str = ""
     response: str = ""
     mounted_pointer_ids: list[str] = field(default_factory=list)
+    explicit_pointer_ids: list[str] = field(default_factory=list)
+    prefetched_pointer_ids: list[str] = field(default_factory=list)
+    prefetched_scores: list[float] = field(default_factory=list)
+    retrieval_query: str = ""
+    mounted_latent_count: int = 0
+    mounted_latent_tokens: int = 0
 
 
 @dataclass

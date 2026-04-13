@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import hashlib
-import re
 from typing import Optional, Sequence
 
 import torch
 from torch import nn
 
-from latent_os.data_models import (
+from ssamem.data_models import (
     AgentMessage,
     ConsolidationResult,
     LatentTensor,
@@ -15,35 +13,8 @@ from latent_os.data_models import (
     PointerSearchHit,
     ResolvedIPCMessage,
 )
-from latent_os.storage import PersistentMemoryBackend
-
-
-class HashEmbeddingEncoder(nn.Module):
-    def __init__(self, key_dim: int, vocab_size: int = 4096) -> None:
-        super().__init__()
-        self.vocab_size = vocab_size
-        self.embedding = nn.Embedding(vocab_size, key_dim)
-
-    def _token_to_id(self, token: str) -> int:
-        digest = hashlib.sha1(token.encode("utf-8")).hexdigest()
-        return int(digest, 16) % self.vocab_size
-
-    def tokenize(self, text: str) -> list[int]:
-        tokens = re.findall(r"\w+|[^\w\s]", text.lower())
-        if not tokens:
-            tokens = ["<empty>"]
-        return [self._token_to_id(token) for token in tokens]
-
-    def forward(self, texts: str | Sequence[str]) -> torch.Tensor:
-        if isinstance(texts, str):
-            texts = [texts]
-
-        pooled_vectors = []
-        for text in texts:
-            token_ids = torch.tensor(self.tokenize(text), device=self.embedding.weight.device)
-            token_embeds = self.embedding(token_ids)
-            pooled_vectors.append(token_embeds.mean(dim=0))
-        return torch.stack(pooled_vectors, dim=0)
+from ssamem.retrieval import BaseRetriever
+from ssamem.storage import PersistentMemoryBackend
 
 
 class MemoryAgent(nn.Module):
@@ -53,7 +24,6 @@ class MemoryAgent(nn.Module):
         key_dim: Optional[int] = None,
         *,
         page_table: Optional[PageTable] = None,
-        query_encoder: Optional[nn.Module] = None,
         reward_threshold: float = 0.0,
         latent_window: int = 8,
         persistence: Optional[PersistentMemoryBackend] = None,
@@ -63,7 +33,6 @@ class MemoryAgent(nn.Module):
         self.hidden_size = hidden_size
         self.key_dim = key_dim or hidden_size
         self.page_table = page_table or PageTable()
-        self.query_encoder = query_encoder or HashEmbeddingEncoder(key_dim=self.key_dim)
         self.reward_threshold = reward_threshold
         self.latent_window = latent_window
         self.memory_store: dict[str, LatentTensor] = {}
@@ -140,32 +109,6 @@ class MemoryAgent(nn.Module):
             hits.append(PointerSearchHit(pointer=pointer, score=float("inf"), latent=latent))
         return hits
 
-    def maximum_inner_product_search(
-        self,
-        intent_text: str,
-        *,
-        top_k: int = 1,
-        exclude_pointers: Optional[Sequence[str]] = None,
-    ) -> list[PointerSearchHit]:
-        if top_k <= 0 or not self.memory_store:
-            return []
-
-        exclude = set(exclude_pointers or [])
-        valid_memories = [latent for latent in self.memory_store.values() if latent.pointer not in exclude]
-        if not valid_memories:
-            return []
-
-        query = self.query_encoder(intent_text).squeeze(0).float()
-        key_bank = torch.stack([latent.key_vector.to(query.device, dtype=query.dtype) for latent in valid_memories], dim=0)
-        scores = torch.matmul(key_bank, query)
-
-        top_scores, top_indices = torch.topk(scores, k=min(top_k, scores.numel()), dim=0)
-        hits = []
-        for score, index in zip(top_scores.tolist(), top_indices.tolist()):
-            latent = valid_memories[index]
-            hits.append(PointerSearchHit(pointer=latent.pointer or "", score=float(score), latent=latent))
-        return hits
-
     def consolidate_episode(
         self,
         hidden_states: torch.Tensor,
@@ -212,14 +155,16 @@ class MemoryAgent(nn.Module):
 
 
 class IPCBus:
-    def __init__(self, memory_agent: MemoryAgent) -> None:
+    def __init__(self, memory_agent: MemoryAgent, retriever: BaseRetriever) -> None:
         self.memory_agent = memory_agent
+        self.retriever = retriever
 
     def intercept(self, message: AgentMessage, *, top_k_prefetch: int = 0) -> ResolvedIPCMessage:
         explicit_pointers = message.extract_pointers()
         explicit_hits = self.memory_agent.resolve_explicit_pointers(explicit_pointers)
-        prefetched_hits = self.memory_agent.maximum_inner_product_search(
-            message.content,
+        prefetched_hits = self.retriever.search(
+            intent_text=message.content,
+            memory_store=self.memory_agent.memory_store,
             top_k=top_k_prefetch,
             exclude_pointers=explicit_pointers,
         )
@@ -231,10 +176,16 @@ class IPCBus:
 
 
 class OSKernel(nn.Module):
-    def __init__(self, memory_agent: MemoryAgent, ipc_bus: Optional[IPCBus] = None) -> None:
+    def __init__(
+        self,
+        memory_agent: MemoryAgent,
+        retriever: BaseRetriever,
+        ipc_bus: Optional[IPCBus] = None,
+    ) -> None:
         super().__init__()
         self.memory_agent = memory_agent
-        self.ipc_bus = ipc_bus or IPCBus(memory_agent=memory_agent)
+        self.retriever = retriever
+        self.ipc_bus = ipc_bus or IPCBus(memory_agent=memory_agent, retriever=retriever)
 
     def handle_ipc(self, message: AgentMessage, *, top_k_prefetch: int = 0) -> ResolvedIPCMessage:
         return self.ipc_bus.intercept(message, top_k_prefetch=top_k_prefetch)

@@ -6,12 +6,12 @@ from typing import Optional, Sequence
 
 import torch
 from torch import nn
-from transformers import AutoTokenizer, GenerationConfig, LlamaConfig, LlamaForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, LlamaConfig, LlamaForCausalLM
 
-from latent_os.config import PipelineConfig, RuntimeConfig
-from latent_os.data_models import AgentMessage, MASExecutionTrace, MASTurn
-from latent_os.mas import DEFAULT_MEMORY_CONTENT, build_mas_topology
-from latent_os.tokenizer import SimpleTokenizer
+from ssamem.config import PipelineConfig, RuntimeConfig
+from ssamem.data_models import AgentMessage, MASExecutionTrace, MASTurn
+from ssamem.mas import DEFAULT_MEMORY_CONTENT, build_mas_topology
+from ssamem.tokenizer import SimpleTokenizer
 
 
 def freeze_model(model: nn.Module) -> None:
@@ -28,6 +28,26 @@ def resolve_torch_dtype(dtype_name: str) -> torch.dtype:
     if dtype_name not in dtype_map:
         raise ValueError(f"Unsupported torch dtype '{dtype_name}'.")
     return dtype_map[dtype_name]
+
+
+def build_deterministic_generation_config(
+    *,
+    max_new_tokens: int,
+    pad_token_id: int,
+    eos_token_id: int,
+) -> GenerationConfig:
+    generation_config = GenerationConfig(
+        max_new_tokens=max_new_tokens,
+        do_sample=False,
+        pad_token_id=pad_token_id,
+        eos_token_id=eos_token_id,
+    )
+    generation_config.temperature = None
+    generation_config.top_k = None
+    generation_config.top_p = None
+    generation_config.min_p = None
+    generation_config.typical_p = None
+    return generation_config
 
 
 @dataclass
@@ -55,7 +75,7 @@ class _RoleRuntime(nn.Module):
     `UserSpaceMAS` so the public user-space abstraction is MAS-first.
     """
 
-    def __init__(self, model: LlamaForCausalLM, tokenizer, freeze_backbone: bool = True) -> None:
+    def __init__(self, model: nn.Module, tokenizer, freeze_backbone: bool = True) -> None:
         super().__init__()
         self.model = model
         self.tokenizer = tokenizer
@@ -75,13 +95,22 @@ class _RoleRuntime(nn.Module):
             if not config.model_name_or_path:
                 raise ValueError("`model_name_or_path` is required when runtime_mode='hf'.")
             dtype = resolve_torch_dtype(config.torch_dtype)
-            model = LlamaForCausalLM.from_pretrained(
+            model = AutoModelForCausalLM.from_pretrained(
                 config.model_name_or_path,
                 torch_dtype=dtype,
+                trust_remote_code=config.trust_remote_code,
             )
             tokenizer = AutoTokenizer.from_pretrained(
-                config.tokenizer_name_or_path or config.model_name_or_path
+                config.tokenizer_name_or_path or config.model_name_or_path,
+                trust_remote_code=config.trust_remote_code,
             )
+            if getattr(model, "generation_config", None) is not None:
+                model.generation_config.do_sample = False
+                model.generation_config.temperature = None
+                model.generation_config.top_k = None
+                model.generation_config.top_p = None
+                model.generation_config.min_p = None
+                model.generation_config.typical_p = None
         elif config.runtime_mode == "tiny-random":
             llama_config = LlamaConfig(
                 vocab_size=config.vocab_size,
@@ -377,9 +406,8 @@ class UserSpaceMAS(nn.Module):
     ) -> UserSpaceGenerationOutput:
         role_prompt = self.build_prompt_for_role(content)
         if generation_config is None:
-            generation_config = GenerationConfig(
+            generation_config = build_deterministic_generation_config(
                 max_new_tokens=self.max_new_tokens,
-                do_sample=False,
                 pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
             )
@@ -424,7 +452,12 @@ class UserSpaceMAS(nn.Module):
                 generation_config=generation_config,
             )
             role_outputs[role_spec.role] = generation.text
+            explicit_pointer_ids = [hit.pointer for hit in resolved.explicit_hits]
+            prefetched_pointer_ids = [hit.pointer for hit in resolved.prefetched_hits]
+            prefetched_scores = [hit.score for hit in resolved.prefetched_hits]
             mounted_pointer_ids = [hit.pointer for hit in resolved.explicit_hits + resolved.prefetched_hits]
+            mounted_latent_count = len(resolved.mounted_latents)
+            mounted_latent_tokens = sum(int(latent.size(0)) for latent in resolved.mounted_latents)
             trace.turns.append(
                 MASTurn(
                     role=role_spec.role,
@@ -432,6 +465,12 @@ class UserSpaceMAS(nn.Module):
                     prompt=self.build_prompt_for_role(role_prompt),
                     response=generation.text,
                     mounted_pointer_ids=mounted_pointer_ids,
+                    explicit_pointer_ids=explicit_pointer_ids,
+                    prefetched_pointer_ids=prefetched_pointer_ids,
+                    prefetched_scores=prefetched_scores,
+                    retrieval_query=ipc_message.content,
+                    mounted_latent_count=mounted_latent_count,
+                    mounted_latent_tokens=mounted_latent_tokens,
                 )
             )
 

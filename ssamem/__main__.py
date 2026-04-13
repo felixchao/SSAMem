@@ -1,4 +1,4 @@
-from latent_os.main import main
+from ssamem.main import main
 
 
 if __name__ == "__main__":

@@ -5,14 +5,15 @@ from typing import Optional
 import torch
 from transformers import GenerationConfig
 
-from latent_os.config import PipelineConfig
-from latent_os.data_models import AgentMessage, MASExecutionTrace, PipelineRunResult
-from latent_os.kernelspace import MemoryAgent, OSKernel
-from latent_os.storage import PersistentMemoryBackend
-from latent_os.userspace import UserSpaceMAS
+from ssamem.config import PipelineConfig
+from ssamem.data_models import AgentMessage, MASExecutionTrace, PipelineRunResult
+from ssamem.kernelspace import MemoryAgent, OSKernel
+from ssamem.retrieval import build_retriever
+from ssamem.storage import PersistentMemoryBackend
+from ssamem.userspace import UserSpaceMAS, build_deterministic_generation_config
 
 
-class PointerDrivenLatentOSPipeline:
+class PointerDrivenSSAMemPipeline:
     def __init__(
         self,
         userspace: UserSpaceMAS,
@@ -29,22 +30,28 @@ class PointerDrivenLatentOSPipeline:
         self.strip_pointer_tokens = strip_pointer_tokens
 
     @classmethod
-    def from_config(cls, config: PipelineConfig) -> "PointerDrivenLatentOSPipeline":
+    def from_config(cls, config: PipelineConfig) -> "PointerDrivenSSAMemPipeline":
         userspace = UserSpaceMAS.from_config(config)
         persistence = None
         if config.kernel.storage_root:
             persistence = PersistentMemoryBackend(config.kernel.storage_root)
+        key_dim = config.kernel.key_dim or userspace.hidden_size
         memory_agent = MemoryAgent(
             hidden_size=userspace.hidden_size,
-            key_dim=config.kernel.key_dim,
+            key_dim=key_dim,
             reward_threshold=config.kernel.reward_threshold,
             latent_window=config.kernel.latent_window,
             persistence=persistence,
             autosave=config.kernel.autosave,
         )
+        retriever = build_retriever(
+            config.kernel.retriever_type,
+            key_dim=memory_agent.key_dim,
+            hash_vocab_size=config.kernel.hash_vocab_size,
+        )
         if persistence is not None and config.kernel.autoload:
             memory_agent.load_from_disk(map_location=userspace.device)
-        kernel = OSKernel(memory_agent=memory_agent)
+        kernel = OSKernel(memory_agent=memory_agent, retriever=retriever)
         return cls(
             userspace=userspace,
             kernel=kernel,
@@ -86,9 +93,8 @@ class PointerDrivenLatentOSPipeline:
         userspace_prompt = self.build_prompt_for_userspace(content)
 
         if generation_config is None:
-            generation_config = GenerationConfig(
+            generation_config = build_deterministic_generation_config(
                 max_new_tokens=self.max_new_tokens,
-                do_sample=False,
                 pad_token_id=self.userspace.tokenizer.pad_token_id,
                 eos_token_id=self.userspace.tokenizer.eos_token_id,
             )
@@ -98,12 +104,23 @@ class PointerDrivenLatentOSPipeline:
             mounted_latents=resolved.mounted_latents,
             generation_config=generation_config,
         )
+        explicit_pointer_ids = [hit.pointer for hit in resolved.explicit_hits]
+        prefetched_pointer_ids = [hit.pointer for hit in resolved.prefetched_hits]
+        prefetched_scores = [hit.score for hit in resolved.prefetched_hits]
         mounted_pointer_ids = [hit.pointer for hit in resolved.explicit_hits + resolved.prefetched_hits]
+        mounted_latent_count = len(resolved.mounted_latents)
+        mounted_latent_tokens = sum(int(latent.size(0)) for latent in resolved.mounted_latents)
         return PipelineRunResult(
             resolved_message=resolved,
             prompt=userspace_prompt,
             output_text=generation.text,
             mounted_pointer_ids=mounted_pointer_ids,
+            explicit_pointer_ids=explicit_pointer_ids,
+            prefetched_pointer_ids=prefetched_pointer_ids,
+            prefetched_scores=prefetched_scores,
+            retrieval_query=ipc_message.content,
+            mounted_latent_count=mounted_latent_count,
+            mounted_latent_tokens=mounted_latent_tokens,
         )
 
     def consolidate_episode(

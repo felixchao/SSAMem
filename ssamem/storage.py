@@ -6,7 +6,7 @@ from typing import Optional
 
 import torch
 
-from latent_os.data_models import LatentTensor, PageTable
+from ssamem.data_models import LatentTensor, PageTable
 
 
 class DiskPageTableStore:
