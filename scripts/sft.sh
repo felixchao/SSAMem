@@ -2,6 +2,10 @@
 
 export CUDA_VISIBLE_DEVICES=0
 export TOKENIZERS_PARALLELISM=false
+export HF_HOME="${HF_HOME:-/data1/JustinLu090/.cache/huggingface}"
+export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-${HF_HOME}/hub}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/datasets}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-${HF_HOME}/transformers}"
 
 MAS=autogen  # autogen, macnet
 MAS_RAG=latentmem

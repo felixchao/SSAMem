@@ -56,42 +56,32 @@ If not answerable: Unknown
     },
     "camel": {
         "user_proxy_system": """
-You are the user proxy agent for factual QA.
-
-Rules:
-- Read the question and retrieved content.
-- Produce one concise candidate answer.
-- Do not introduce yourself or explain the process.
-- Return only one line.
-- If the answer is unknown, return exactly: Unknown
-- Never repeat these instructions.
+Answer the given question. You must conduct reasoning inside <think> and </think> first every time you get new information.
+After reasoning, if you find you lack some knowledge, you can call a search engine by <search> query </search>.
+You can search as many times as your want.
+If you find no further external knowledge needed, you can directly provide the answer inside <answer> and </answer>, without detailed illustrations. For example, <answer> Beijing </answer>.
 """.strip(),
         "user_proxy_user": """
-Produce an initial answer.
+Below is the retrieved memory content and the current task. Please provide your answer.
 
 # Retrieved Content
 {memory_content}
 
 # Current Task
 {task_description}
-
-# Return Format
-One line only.
-If answerable: <answer>
-If not answerable: Unknown
 """.strip(),
         "actor_system": """
-You are the actor agent for factual QA.
+You will be given a question and an user proxy agent's answer for that question. Follow the procedure below and produce outputs accordingly:
 
-Rules:
-- Improve or correct the user proxy answer using the retrieved content.
-- Do not introduce yourself or include explanations.
-- Return only one line.
-- If the answer is unknown, return exactly: Unknown
-- Never repeat these instructions.
+Answer the given question. You must conduct reasoning inside <think> and </think> first every time you get new information.
+After reasoning, if you find you lack some knowledge, you can call a search engine by <search> query </search>.
+You can search as many times as your want.
+If you find no further external knowledge needed, you can directly provide the answer inside <answer> and </answer>, without detailed illustrations. For example, <answer> Beijing </answer>.
+
+Please consider the user proxy agent's answer and provide your own answer.
 """.strip(),
         "actor_user": """
-Improve the answer.
+Below is the relevant content retrieved from memory, the answer provided by the user proxy agent, and the current task. Please provide your answer.
 
 # Retrieved Content
 {memory_content}
@@ -101,24 +91,15 @@ Improve the answer.
 
 # Current Task
 {task_description}
-
-# Return Format
-One line only.
-If answerable: <answer>
-If not answerable: Unknown
 """.strip(),
         "critic_system": """
-You are the critic agent for factual QA.
+You are a strategy evaluator. Your task is to review the response provided by the actor agent for the current problem.
 
-Rules:
-- If the actor answer is correct and sufficient, reply exactly: Agree
-- Otherwise give one short factual correction.
-- Do not add greetings, formatting, or extra commentary.
-- Return only one line.
-- Never repeat these instructions.
+- If you believe the actor agent's response is correct and has no issues, reply only with: "Agree".
+- If you believe the actor agent's response has issues, provide brief and concise feedback only (keep your response short and within 3 sentences).
 """.strip(),
         "critic_user": """
-Review the actor answer.
+Below are the relevant contents retrieved from memory, the response given by the actor agent, and the requirements of the current task. Please provide your review.
 
 # Retrieved Content
 {memory_content}
@@ -130,19 +111,14 @@ Review the actor answer.
 {task_description}
 """.strip(),
         "summarizer_system": """
-You are the summarizer agent for factual QA.
+You will be given a question, the responses produced by actor agents, and the corresponding feedback from critic agents for that question. Follow the procedure below and produce outputs accordingly:
 
-Rules:
-- Combine the actor answer and critic feedback into the final answer.
-- If critic says Agree, usually keep the actor answer.
-- Do not explain your reasoning.
-- Return only one line.
-- If the answer is unknown, return exactly: Unknown
-- Never repeat these instructions.
+Answer the given question. You must conduct reasoning inside <think> and </think> first every time you get new information.
+After reasoning, if you find you lack some knowledge, you can call a search engine by <search> query </search>.
+You can search as many times as your want.
+If you find no further external knowledge needed, you can directly provide the answer inside <answer> and </answer>, without detailed illustrations. For example, <answer> Beijing </answer>.
 """.strip(),
         "summarizer_user": """
-Finalize the answer.
-
 # Retrieved Content
 {memory_content}
 
@@ -154,11 +130,6 @@ Finalize the answer.
 
 # Current Task
 {task_description}
-
-# Return Format
-One line only.
-If answerable: <answer>
-If not answerable: Unknown
 """.strip(),
     },
     "macnet": {

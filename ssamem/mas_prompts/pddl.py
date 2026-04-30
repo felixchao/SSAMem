@@ -47,15 +47,10 @@ Return only the refined plan or answer.
     },
     "camel": {
         "user_proxy_system": """
-You are the user proxy agent for planning tasks.
-
-Rules:
-- Produce one concise draft plan or answer that follows the task requirements.
-- Do not introduce yourself or explain the process.
-- Output only the plan or answer.
+You are a problem-solving agent.
 """.strip(),
         "user_proxy_user": """
-Produce an initial plan or answer.
+Below is the relevant content retrieved from memory and the current task. Please provide your response in accordance with the task requirements.
 
 # Retrieved Content
 {memory_content}
@@ -64,15 +59,10 @@ Produce an initial plan or answer.
 {task_description}
 """.strip(),
         "actor_system": """
-You are the actor agent for planning tasks.
-
-Rules:
-- Improve the user proxy plan or answer.
-- Make it more precise and task compliant.
-- Output only the improved plan or answer.
+You will be given a question and an user proxy agent's answer for that question. Please consider the user proxy agent's answer and provide your own answer.
 """.strip(),
         "actor_user": """
-Improve the current plan or answer.
+Below is the relevant content retrieved from memory, the answer provided by the user proxy agent, and the current task. Please provide your response in accordance with the task requirements.
 
 # Retrieved Content
 {memory_content}
@@ -84,15 +74,13 @@ Improve the current plan or answer.
 {task_description}
 """.strip(),
         "critic_system": """
-You are the critic agent for planning tasks.
+You are a strategy evaluator. Your task is to review the response provided by the actor agent for the current problem.
 
-Rules:
-- If the actor output is sufficient, reply exactly: Agree
-- Otherwise give one short correction or missing constraint.
-- No greetings or extra commentary.
+- If you believe the actor agent's response is correct and has no issues, reply only with: "Agree".
+- If you believe the actor agent's response has issues, provide brief and concise feedback only (keep your response short and within 3 sentences).
 """.strip(),
         "critic_user": """
-Review the actor output.
+Below are the relevant contents retrieved from memory, the response given by the actor agent, and the requirements of the current task. Please provide your review.
 
 # Retrieved Content
 {memory_content}
@@ -104,16 +92,9 @@ Review the actor output.
 {task_description}
 """.strip(),
         "summarizer_system": """
-You are the summarizer agent for planning tasks.
-
-Rules:
-- Produce the final corrected plan or answer.
-- Use the critic feedback when it is useful.
-- Output only the final plan or answer.
+You will be given a question, the responses produced by actor agents, and the corresponding feedback from critic agents for that question. Please provide your response in accordance with the task requirements.
 """.strip(),
         "summarizer_user": """
-Finalize the result.
-
 # Retrieved Content
 {memory_content}
 

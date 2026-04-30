@@ -46,35 +46,32 @@ Output only the final short answer or Unknown.
     },
     "camel": {
         "user_proxy_system": """
-You are the user proxy agent for short-form factoid QA.
-
-Rules:
-- Produce one concise candidate answer.
-- Do not explain or add extra words.
-- Output only the candidate answer or Unknown.
+Answer the given question. You must conduct reasoning inside <think> and </think> first every time you get new information.
+After reasoning, if you find you lack some knowledge, you can call a search engine by <search> query </search>.
+You can search as many times as your want.
+If you find no further external knowledge needed, you can directly provide the answer inside <answer> and </answer>, without detailed illustrations. For example, <answer> Beijing </answer>.
 """.strip(),
         "user_proxy_user": """
-Produce an initial answer.
+Below is the retrieved memory content and the current task. Please provide your answer.
 
 # Retrieved Content
 {memory_content}
 
 # Current Task
 {task_description}
-
-# Output Requirement
-Output only the candidate answer or Unknown.
 """.strip(),
         "actor_system": """
-You are the actor agent for short-form factoid QA.
+You will be given a question and an user proxy agent's answer for that question. Follow the procedure below and produce outputs accordingly:
 
-Rules:
-- Improve or correct the user proxy answer.
-- Keep the answer extremely concise.
-- Output only the answer or Unknown.
+Answer the given question. You must conduct reasoning inside <think> and </think> first every time you get new information.
+After reasoning, if you find you lack some knowledge, you can call a search engine by <search> query </search>.
+You can search as many times as your want.
+If you find no further external knowledge needed, you can directly provide the answer inside <answer> and </answer>, without detailed illustrations. For example, <answer> Beijing </answer>.
+
+Please consider the user proxy agent's answer and provide your own answer.
 """.strip(),
         "actor_user": """
-Improve the answer.
+Below is the relevant content retrieved from memory, the answer provided by the user proxy agent, and the current task. Please provide your answer.
 
 # Retrieved Content
 {memory_content}
@@ -84,20 +81,15 @@ Improve the answer.
 
 # Current Task
 {task_description}
-
-# Output Requirement
-Output only the best answer or Unknown.
 """.strip(),
         "critic_system": """
-You are the critic agent for short-form factoid QA.
+You are a strategy evaluator. Your task is to review the response provided by the actor agent for the current problem.
 
-Rules:
-- If the actor answer is correct, reply exactly: Agree
-- Otherwise give one short correction.
-- No extra commentary.
+- If you believe the actor agent's response is correct and has no issues, reply only with: "Agree".
+- If you believe the actor agent's response has issues, provide brief and concise feedback only (keep your response short and within 3 sentences).
 """.strip(),
         "critic_user": """
-Review the actor answer.
+Below are the relevant contents retrieved from memory, the response given by the actor agent, and the requirements of the current task. Please provide your review.
 
 # Retrieved Content
 {memory_content}
@@ -109,16 +101,14 @@ Review the actor answer.
 {task_description}
 """.strip(),
         "summarizer_system": """
-You are the summarizer agent for short-form factoid QA.
+You will be given a question, the responses produced by actor agents, and the corresponding feedback from critic agents for that question. Follow the procedure below and produce outputs accordingly:
 
-Rules:
-- Return the final corrected answer.
-- Do not explain.
-- Output only the final answer or Unknown.
+Answer the given question. You must conduct reasoning inside <think> and </think> first every time you get new information.
+After reasoning, if you find you lack some knowledge, you can call a search engine by <search> query </search>.
+You can search as many times as your want.
+If you find no further external knowledge needed, you can directly provide the answer inside <answer> and </answer>, without detailed illustrations. For example, <answer> Beijing </answer>.
 """.strip(),
         "summarizer_user": """
-Finalize the answer.
-
 # Retrieved Content
 {memory_content}
 
@@ -130,9 +120,6 @@ Finalize the answer.
 
 # Current Task
 {task_description}
-
-# Output Requirement
-Output only the final answer or Unknown.
 """.strip(),
     },
     "macnet": {

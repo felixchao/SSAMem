@@ -95,10 +95,23 @@ class _RoleRuntime(nn.Module):
             if not config.model_name_or_path:
                 raise ValueError("`model_name_or_path` is required when runtime_mode='hf'.")
             dtype = resolve_torch_dtype(config.torch_dtype)
+            model_kwargs = {
+                "torch_dtype": dtype,
+                "trust_remote_code": config.trust_remote_code,
+            }
+            if config.load_in_4bit:
+                try:
+                    from transformers import BitsAndBytesConfig
+                except ModuleNotFoundError as exc:
+                    raise RuntimeError("4-bit loading requires `bitsandbytes` support in transformers.") from exc
+                model_kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type=config.bnb_4bit_quant_type,
+                    bnb_4bit_compute_dtype=dtype,
+                )
             model = AutoModelForCausalLM.from_pretrained(
                 config.model_name_or_path,
-                torch_dtype=dtype,
-                trust_remote_code=config.trust_remote_code,
+                **model_kwargs,
             )
             tokenizer = AutoTokenizer.from_pretrained(
                 config.tokenizer_name_or_path or config.model_name_or_path,
@@ -148,6 +161,8 @@ class _RoleRuntime(nn.Module):
     ) -> list[list[torch.Tensor]]:
         batch_size = len(prompts)
         if mounted_latents is None:
+            return [[] for _ in range(batch_size)]
+        if len(mounted_latents) == 0:
             return [[] for _ in range(batch_size)]
 
         if batch_size == 1 and mounted_latents and isinstance(mounted_latents[0], torch.Tensor):
@@ -424,6 +439,7 @@ class UserSpaceMAS(nn.Module):
         kernel,
         mas_style: Optional[str] = None,
         task_domain: Optional[str] = None,
+        memory_content: str = DEFAULT_MEMORY_CONTENT,
         generation_config: Optional[GenerationConfig] = None,
         top_k_prefetch: int = 0,
     ) -> MASExecutionTrace:
@@ -438,7 +454,7 @@ class UserSpaceMAS(nn.Module):
                 task_description,
                 role_outputs,
                 feedback_template=topology.feedback_template,
-                memory_content=DEFAULT_MEMORY_CONTENT,
+                memory_content=memory_content or DEFAULT_MEMORY_CONTENT,
             )
             ipc_message = AgentMessage(
                 sender_id="kernel" if not role_spec.upstream_roles else ",".join(role_spec.upstream_roles),

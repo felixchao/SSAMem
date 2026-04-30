@@ -148,6 +148,7 @@ class PointerDrivenSSAMemPipeline:
         *,
         mas_style: str = "camel",
         task_domain: Optional[str] = None,
+        memory_content: str = "[mounted-latent-memory]",
         generation_config: Optional[GenerationConfig] = None,
         top_k_prefetch: Optional[int] = None,
     ) -> MASExecutionTrace:
@@ -156,6 +157,7 @@ class PointerDrivenSSAMemPipeline:
             kernel=self.kernel,
             mas_style=mas_style,
             task_domain=task_domain,
+            memory_content=memory_content,
             generation_config=generation_config,
             top_k_prefetch=self.top_k_prefetch if top_k_prefetch is None else top_k_prefetch,
         )

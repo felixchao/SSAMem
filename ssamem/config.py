@@ -13,6 +13,8 @@ class RuntimeConfig:
     trust_remote_code: bool = False
     torch_dtype: str = "float32"
     device: str = "cpu"
+    load_in_4bit: bool = False
+    bnb_4bit_quant_type: str = "nf4"
 
     # Tiny random Llama config
     vocab_size: int = 512

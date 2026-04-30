@@ -1,0 +1,27 @@
+runtime:
+  runtime_mode: hf
+  device: cuda
+  trust_remote_code: true
+  torch_dtype: float16
+
+data:
+  manifest: data/trajectory_context_qwen3_4b/train/manifest.jsonl
+  valid_manifest: data/trajectory_context_qwen3_4b/valid/manifest.jsonl
+
+training:
+  base_model: Qwen/Qwen3-4B-Instruct-2507
+  load_in_4bit: true
+  learning_rate: 0.00005
+  epochs: 2
+  batch_size: 2
+  log_every: 10
+  grad_clip_norm: 1.0
+  output_path: outputs/trajectory_context_distill/trajectory_context_distiller.pt
+  history_path: outputs/trajectory_context_distill/logs/trajectory_context_distiller.history.json
+  alignment:
+    loss_type: smooth_l1
+    distill_loss_div_std: true
+    train_lora_backbone: false
+    answer_loss_weight: 0.05
+    preference_loss_weight: 0.0
+    latent_max_tokens: 512

@@ -1,0 +1,9 @@
+data:
+  rollouts: data/rollouts.jsonl
+
+rollout:
+  pointers:
+    - <PTR_0x001>
+    - <PTR_0x002>
+    - <PTR_0x003>
+  positive_pointer: <PTR_0x001>

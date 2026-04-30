@@ -1,0 +1,28 @@
+runtime:
+  runtime_mode: hf
+  device: cuda
+  trust_remote_code: true
+
+data:
+  manifest: data/ssa_qwen3_4b_2507_mix3300/manifest.jsonl
+
+training:
+  base_model: Qwen/Qwen3-4B-Instruct-2507
+  load_in_4bit: true
+  learning_rate: 0.0002
+  epochs: 5
+  batch_size: 4
+  log_every: 10
+  adapter_output_dir: outputs/ssa_adapter_3300
+  output_path: outputs/ssa_distiller_3300.pt
+  lora:
+    r: 128
+    alpha: 32
+    target_modules:
+      - q_proj
+      - v_proj
+  alignment:
+    loss_type: smooth_l1
+    distill_loss_div_std: true
+    answer_anchor: answer_prefix_last_token
+    latent_max_tokens: 128

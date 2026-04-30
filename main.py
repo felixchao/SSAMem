@@ -5,6 +5,25 @@ import random
 import numpy as np
 from datetime import datetime 
 
+def configure_cache_dirs():
+    base_cache_dir = os.environ.setdefault("HF_HOME", "/data1/JustinLu090/.cache/huggingface")
+    hub_cache_dir = os.environ.setdefault("HUGGINGFACE_HUB_CACHE", os.path.join(base_cache_dir, "hub"))
+    os.environ.setdefault("HF_HUB_CACHE", hub_cache_dir)
+    os.environ.setdefault("HF_DATASETS_CACHE", os.path.join(base_cache_dir, "datasets"))
+    os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(base_cache_dir, "transformers"))
+    os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", os.path.join(base_cache_dir, "sentence_transformers"))
+
+    for path in {
+        base_cache_dir,
+        hub_cache_dir,
+        os.environ["HF_DATASETS_CACHE"],
+        os.environ["TRANSFORMERS_CACHE"],
+        os.environ["SENTENCE_TRANSFORMERS_HOME"],
+    }:
+        os.makedirs(path, exist_ok=True)
+
+configure_cache_dirs()
+
 from common.config import Config
 from common.logger import setup_logger
 from common.registry import registry
@@ -58,7 +77,6 @@ def get_working_dir(config: Config) -> str:
 
 
 def main():
-
     # parse configs
     args = parse_args()
     config = Config(args)

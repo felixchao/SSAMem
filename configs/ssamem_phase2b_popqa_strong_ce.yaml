@@ -1,0 +1,27 @@
+runtime:
+  runtime_mode: hf
+  device: cuda
+  trust_remote_code: true
+  torch_dtype: float16
+
+data:
+  manifest: data/ssa_popqa_kodcode_qwen3_4b_2507/filtered/popqa_train.jsonl
+  valid_manifest: data/ssa_popqa_kodcode_qwen3_4b_2507/filtered/popqa_valid.jsonl
+
+training:
+  base_model: Qwen/Qwen3-4B-Instruct-2507
+  load_in_4bit: true
+  init_checkpoint: outputs/ssa_phased/phase2_popqa_fixed_answer_loss.pt
+  learning_rate: 0.00002
+  epochs: 1
+  batch_size: 4
+  log_every: 10
+  grad_clip_norm: 1.0
+  output_path: outputs/ssa_phased/phase2b_popqa_strong_ce.pt
+  history_path: outputs/ssa_phased/logs/phase2b_popqa_strong_ce.history.json
+  alignment:
+    loss_type: smooth_l1
+    distill_loss_div_std: true
+    train_lora_backbone: false
+    answer_loss_weight: 0.1
+    latent_max_tokens: 128

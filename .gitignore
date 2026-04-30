@@ -1,0 +1,67 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging and build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE and OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Local experiment outputs
+results/
+logs/
+runs/
+
+# Environment and local overrides
+.env
+.env.*
+
+# Model and dataset artifacts
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+*.onnx
+
+# SSAMem generated datasets, trajectories, latents, and checkpoints
+data/
+outputs/
+.cache/
+
+# Large/generated experiment files
+*.jsonl
+*.log
+*.out
+*.err
+wandb/
+tensorboard/
+lightning_logs/
+
+# Keep source examples under version control if explicitly added later
+!examples/
+!examples/**/*

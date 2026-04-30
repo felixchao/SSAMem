@@ -1,3 +1,7 @@
 torch
 transformers
 datasets
+trl
+peft
+bitsandbytes
+pyyaml
