@@ -1,0 +1,9 @@
+
+x = 10
+y = 20
+x + y
+y * 2
+z = 5
+z ** 2
+non_existing_variable
+for i in range(1): pass

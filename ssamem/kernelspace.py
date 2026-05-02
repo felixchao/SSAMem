@@ -51,14 +51,92 @@ class MemoryAgent(nn.Module):
             nn.Identity() if self.hidden_size == self.key_dim else nn.Linear(self.hidden_size, self.key_dim)
         )
         self.cluster_assignment_lsh = RandomHyperplaneLSHIndex(self.key_dim)
+        # LSH-based memory bucketing: one hash table with 6 projections
+        self.lsh_memory_storage = RandomHyperplaneLSHIndex(self.key_dim, num_tables=1, num_planes=6)
+        # Buckets store lists of latents: bucket_key -> [LatentTensor, ...]
+        self.memory_buckets: dict[tuple[int, ...], list[LatentTensor]] = {}
 
     def build_key_vector(self, tensor_data: torch.Tensor) -> torch.Tensor:
         pooled = tensor_data.mean(dim=0)
         key_vector = self.key_projector(pooled)
         return key_vector.detach().float()
 
+    def _get_bucket_key(self, key_vector: torch.Tensor) -> tuple[int, ...]:
+        """Get LSH bucket key for a key vector using memory storage LSH."""
+        return self.lsh_memory_storage.get_bucket_key(key_vector, table_index=0)
+
+    def _get_or_create_bucket(self, key_vector: torch.Tensor) -> tuple[int, ...]:
+        """Get or create a bucket for the given key vector."""
+        bucket_key = self._get_bucket_key(key_vector)
+        if bucket_key not in self.memory_buckets:
+            self.memory_buckets[bucket_key] = []
+        return bucket_key
+
+    def get_bucket_info(self, bucket_key: tuple[int, ...]) -> dict:
+        """Get information about a bucket (for debugging)."""
+        if bucket_key not in self.memory_buckets:
+            return {"bucket_key": bucket_key, "latent_count": 0, "pointer": None}
+        
+        bucket_latents = self.memory_buckets[bucket_key]
+        pointer = bucket_latents[0].pointer if bucket_latents and bucket_latents[0].pointer else None
+        return {
+            "bucket_key": bucket_key,
+            "latent_count": len(bucket_latents),
+            "pointer": pointer,
+            "storage_ids": [lat.storage_id for lat in bucket_latents],
+        }
+
+    def _assign_latent_to_bucket(
+        self,
+        latent: LatentTensor,
+        *,
+        metadata: Optional[dict] = None,
+        memory_summary: str = "",
+        source_agent: Optional[str] = None,
+        timestamp: Optional[str] = None,
+    ) -> MemoryCluster:
+        """Assign a latent to a bucket and create/reuse a cluster for the bucket."""
+        bucket_key = self._get_or_create_bucket(latent.key_vector)
+        
+        # Add latent to bucket
+        self.memory_buckets[bucket_key].append(latent)
+        self.memory_store[latent.storage_id] = latent
+        
+        # Check if bucket already has a cluster pointer
+        # Use first latent's pointer if it exists
+        if len(self.memory_buckets[bucket_key]) == 1:
+            # First latent in bucket: create new cluster
+            cluster = self.create_cluster_from_latent(
+                latent,
+                summary_key_text=str((metadata or {}).get("topic") or latent.metadata.get("topic") or ""),
+                summary_key_embedding=latent.key_vector.detach().clone(),
+                metadata=metadata,
+            )
+        else:
+            # Append to existing cluster
+            first_latent = self.memory_buckets[bucket_key][0]
+            if first_latent.pointer:
+                cluster = self.get_cluster_by_pointer(first_latent.pointer)
+                self._append_prebuilt_latent_to_cluster(
+                    cluster,
+                    latent,
+                    metadata=metadata,
+                    memory_summary=memory_summary,
+                    source_agent=source_agent,
+                    timestamp=timestamp,
+                )
+            else:
+                # Fallback: create new cluster if pointer not set
+                cluster = self.create_cluster_from_latent(
+                    latent,
+                    summary_key_text=str((metadata or {}).get("topic") or latent.metadata.get("topic") or ""),
+                    summary_key_embedding=latent.key_vector.detach().clone(),
+                    metadata=metadata,
+                )
+        return cluster
+
     def register_latent(self, latent: LatentTensor) -> str:
-        cluster = self.assign_latent_to_cluster(latent)
+        cluster = self._assign_latent_to_bucket(latent)
         return cluster.pointer_id or ""
 
     def _autosave_latent(self, latent: LatentTensor) -> None:
@@ -398,6 +476,14 @@ class MemoryAgent(nn.Module):
         self.page_table = page_table
         self.memory_store = memory_store
         self.memory_clusters = memory_clusters
+        
+        # Rebuild buckets from loaded memory_store
+        self.memory_buckets = {}
+        for storage_id, latent in memory_store.items():
+            bucket_key = self._get_bucket_key(latent.key_vector)
+            if bucket_key not in self.memory_buckets:
+                self.memory_buckets[bucket_key] = []
+            self.memory_buckets[bucket_key].append(latent)
 
     def get_latent_by_pointer(self, pointer: str) -> LatentTensor:
         cluster = self.get_cluster_by_pointer(pointer)

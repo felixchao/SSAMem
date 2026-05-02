@@ -1,0 +1,7 @@
+
+x = 10
+bad syntax here
+y = 20
+x + y
+z = (y / 0)
+10 - 2

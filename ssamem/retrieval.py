@@ -66,7 +66,7 @@ class BaseRetriever(ABC):
         raise NotImplementedError
 
 
-class RandomHyperplaneLSHIndex:
+ class RandomHyperplaneLSHIndex:
     def __init__(self, dim: int, *, num_tables: int = 4, num_planes: int = 12, seed: int = 7) -> None:
         self.dim = dim
         self.num_tables = num_tables
@@ -78,6 +78,10 @@ class RandomHyperplaneLSHIndex:
     def _signature(self, vector: torch.Tensor, table_index: int) -> tuple[int, ...]:
         projections = torch.matmul(self.hyperplanes[table_index].to(vector.device, dtype=vector.dtype), vector)
         return tuple(int(value.item() > 0) for value in projections)
+    
+    def get_bucket_key(self, vector: torch.Tensor, table_index: int = 0) -> tuple[int, ...]:
+        """Compute bucket key (LSH signature) for a vector on a specific table."""
+        return self._signature(vector, table_index)
 
     def build_buckets(self, cluster_vectors: dict[str, torch.Tensor]) -> list[dict[tuple[int, ...], set[str]]]:
         buckets = [dict() for _ in range(self.num_tables)]
