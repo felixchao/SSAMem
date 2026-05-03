@@ -254,6 +254,23 @@ class PageTable:
     def iter_entries(self) -> Iterable[PageTableEntry]:
         return self.mapping.values()
 
+    def rows(self, *, max_entries: Optional[int] = None) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for index, entry in enumerate(self.mapping.values()):
+            if max_entries is not None and index >= max_entries:
+                break
+            rows.append(
+                {
+                    "key": entry.summary_key_text,
+                    "pointer": entry.pointer_id,
+                    "cluster_id": entry.cluster_id,
+                    "cluster_size": entry.cluster_size,
+                    "utility_score": entry.utility_score,
+                    "version": entry.version,
+                }
+            )
+        return rows
+
     def iter_storage_ids(self) -> Iterable[str]:
         for entry in self.mapping.values():
             if entry.legacy_storage_id is not None:
@@ -287,6 +304,19 @@ class PointerSearchHit:
         if self.local_index is None:
             return self.pointer
         return f"{self.pointer}:{self.local_index:04d}"
+
+
+@dataclass
+class MemoryRequest:
+    mode: str
+    query: str = ""
+    address: Optional[str] = None
+    top_k: int = 1
+    raw_text: str = ""
+
+    @property
+    def requires_memory(self) -> bool:
+        return self.mode in {"SEARCH", "GET"}
 
 
 @dataclass
@@ -337,6 +367,9 @@ class MASTurn:
     retrieval_query: str = ""
     mounted_latent_count: int = 0
     mounted_latent_tokens: int = 0
+    memory_request: Optional[dict[str, Any]] = None
+    memory_observation: str = ""
+    request_response: str = ""
 
 
 @dataclass

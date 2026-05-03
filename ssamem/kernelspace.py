@@ -412,10 +412,34 @@ class MemoryAgent(nn.Module):
     def get_latent_by_address(self, pointer: str, local_index: int) -> LatentTensor:
         return self.get_memory_by_address(pointer, local_index).latent_tensor
 
+    def pointer_table_rows(self, *, max_entries: Optional[int] = None) -> list[dict]:
+        rows = self.page_table.rows(max_entries=max_entries)
+        for row in rows:
+            pointer = row["pointer"]
+            try:
+                cluster = self.get_cluster_by_pointer(pointer)
+            except KeyError:
+                continue
+            row["addresses"] = [f"{pointer}:{memory.local_index:04d}" for memory in cluster.memories]
+            if cluster.memories:
+                row["memory_summaries"] = [memory.memory_summary for memory in cluster.memories]
+        return rows
+
+    def format_pointer_table(self, *, max_entries: Optional[int] = None) -> str:
+        rows = self.pointer_table_rows(max_entries=max_entries)
+        if not rows:
+            return "[Pointer Table]\n(empty)"
+        lines = ["[Pointer Table]", "key | pointer | size | addresses"]
+        for row in rows:
+            key = row.get("key") or "(no summary key)"
+            addresses = ", ".join(row.get("addresses") or [])
+            lines.append(f"{key} | {row['pointer']} | {row['cluster_size']} | {addresses}")
+        return "\n".join(lines)
+
     def resolve_explicit_pointers(self, pointers: Sequence[str | PointerAddress]) -> list[PointerSearchHit]:
         hits = []
         for pointer_ref in pointers:
-            address = pointer_ref if isinstance(pointer_ref, PointerAddress) else PointerAddress(pointer=str(pointer_ref))
+            address = pointer_ref if isinstance(pointer_ref, PointerAddress) else PointerAddress.parse(str(pointer_ref))
             if address.local_index is None:
                 cluster = self.get_cluster_by_pointer(address.pointer)
                 latent = cluster.memories[0].latent_tensor
@@ -519,6 +543,33 @@ class OSKernel(nn.Module):
 
     def handle_ipc(self, message: AgentMessage, *, top_k_prefetch: int = 0) -> ResolvedIPCMessage:
         return self.ipc_bus.intercept(message, top_k_prefetch=top_k_prefetch)
+
+    def search_memory(
+        self,
+        intent_text: str,
+        *,
+        top_k: int = 1,
+        exclude_pointers: Optional[Sequence[str]] = None,
+    ) -> list[PointerSearchHit]:
+        return self.retriever.search(
+            intent_text=intent_text,
+            memory_store=self.memory_agent.memory_store,
+            memory_clusters=self.memory_agent.memory_clusters,
+            top_k=top_k,
+            exclude_pointers=exclude_pointers,
+        )
+
+    def get_memory(self, address: str | PointerAddress) -> ClusterMemory:
+        parsed = address if isinstance(address, PointerAddress) else PointerAddress.parse(str(address))
+        if parsed.local_index is None:
+            cluster = self.memory_agent.get_cluster_by_pointer(parsed.pointer)
+            if not cluster.memories:
+                raise KeyError(f"Pointer {parsed.pointer} maps to an empty cluster.")
+            return cluster.memories[0]
+        return self.memory_agent.get_memory_by_address(parsed.pointer, parsed.local_index)
+
+    def pointer_table_context(self, *, max_entries: Optional[int] = None) -> str:
+        return self.memory_agent.format_pointer_table(max_entries=max_entries)
 
     def consolidate(
         self,

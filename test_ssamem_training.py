@@ -10,6 +10,7 @@ import torch
 from ssamem.config import KernelConfig, PipelineConfig, RuntimeConfig
 from ssamem.data_models import AgentMessage
 from ssamem.kernelspace import IPCBus, MemoryAgent
+from ssamem.memory_actions import parse_memory_request
 from ssamem.pipeline import PointerDrivenSSAMemPipeline
 from ssamem.retrieval import HashEmbeddingEncoder, RandomHyperplaneLSHIndex, DenseInnerProductRetriever
 from ssamem.trainingspace import (
@@ -26,6 +27,7 @@ from ssamem.trainingspace import (
     generate_synthetic_api_ssa_records,
     initialize_pointer_vocabulary,
     load_ssa_manifest,
+    make_multimemory_ssa_manifest,
     pointer_preferences_from_rollouts,
     pointer_tokens,
     ssa_collate,
@@ -161,6 +163,24 @@ class SSAMemTrainingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             PointerPreferenceSample(prompt="bad", chosen="PTR_1", rejected="<PTR_0x002>").validate()
 
+    def test_memory_action_parser_and_exact_get(self) -> None:
+        search = parse_memory_request("SEARCH: tax API rule; top_k=2")
+        self.assertEqual(search.mode, "SEARCH")
+        self.assertEqual(search.query, "tax API rule")
+        self.assertEqual(search.top_k, 2)
+        get = parse_memory_request("GET: <PTR_0x001>:0000")
+        self.assertEqual(get.mode, "GET")
+        self.assertEqual(get.address, "<PTR_0x001>:0000")
+
+        pipeline = build_tiny_pipeline()
+        pointer = pipeline.register_memory_tensor(
+            torch.randn(4, pipeline.userspace.hidden_size),
+            metadata={"topic": "tax API rule"},
+        )
+        memory = pipeline.get_memory(f"{pointer}:0000")
+        self.assertEqual(memory.local_index, 0)
+        self.assertEqual(memory.latent_tensor.pointer, pointer)
+
     def test_build_ssa_manifest_with_latent_shards(self) -> None:
         import tempfile
         from pathlib import Path
@@ -220,6 +240,75 @@ class SSAMemTrainingTests(unittest.TestCase):
             dataset = SSAManifestDataset(tmp_path / "ssa" / "manifest.jsonl")
             batch = ssa_collate([dataset[0]])
             self.assertEqual(batch.target_texts, [" Ada Lovelace"])
+
+    def test_manifest_dataset_loads_multiple_latent_paths_as_one_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            latent_dir = tmp_path / "latents"
+            latent_dir.mkdir()
+            torch.save(torch.ones(2, 32), latent_dir / "a.pt")
+            torch.save(torch.zeros(3, 32), latent_dir / "b.pt")
+            manifest = tmp_path / "manifest.jsonl"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "task_prompt": "What is the answer?",
+                        "context_text": "Two memories are mounted.",
+                        "latent_tensor_paths": ["latents/a.pt", "latents/b.pt"],
+                        "target_text": " answer",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            dataset = SSAManifestDataset(manifest)
+            batch = ssa_collate([dataset[0]])
+
+            self.assertEqual(len(batch.latent_tensors), 1)
+            self.assertIsInstance(batch.latent_tensors[0], list)
+            self.assertEqual(len(batch.latent_tensors[0]), 2)
+            self.assertEqual(batch.target_texts, [" answer"])
+
+    def test_latent_student_projects_multiple_memories_to_fixed_prefix(self) -> None:
+        pipeline = build_tiny_pipeline()
+        student = LatentStudent(pipeline.userspace, composer_prefix_length=4)
+        memories = [torch.randn(2, pipeline.userspace.hidden_size), torch.randn(3, pipeline.userspace.hidden_size)]
+
+        projected = student.project_latents(["Question?\n\nThe answer is:"], [memories])
+
+        self.assertEqual(len(projected), 1)
+        self.assertEqual(tuple(projected[0].shape), (4, pipeline.userspace.hidden_size))
+
+    def test_make_multimemory_manifest_adds_distractors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            latent_dir = tmp_path / "latents"
+            latent_dir.mkdir()
+            rows = []
+            for idx, target in enumerate([" Ada", " Bob", " Cara"]):
+                latent_path = latent_dir / f"{idx}.pt"
+                torch.save(torch.full((2, 32), float(idx)), latent_path)
+                rows.append(
+                    {
+                        "task_prompt": f"Question {idx}?",
+                        "context_text": f"Memory {idx}",
+                        "latent_tensor_path": f"latents/{idx}.pt",
+                        "target_text": target,
+                    }
+                )
+            manifest = tmp_path / "manifest.jsonl"
+            manifest.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+            output = tmp_path / "multi" / "manifest.jsonl"
+
+            payload = make_multimemory_ssa_manifest(manifest, output_path=output, distractors=2, seed=3)
+            samples = load_ssa_manifest(output)
+
+            self.assertEqual(payload["output_count"], 3)
+            self.assertEqual(len(samples), 3)
+            self.assertEqual(len(samples[0].latent_tensor_paths), 3)
+            self.assertEqual(samples[0].metadata["distractor_count"], 2)
+            self.assertIn(samples[0].metadata["positive_memory_index"], [0, 1, 2])
 
     def test_popqa_and_kodcode_records_include_target_text(self) -> None:
         popqa = _record_from_popqa(

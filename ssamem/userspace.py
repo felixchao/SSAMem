@@ -11,6 +11,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, 
 from ssamem.config import PipelineConfig, RuntimeConfig
 from ssamem.data_models import AgentMessage, MASExecutionTrace, MASTurn
 from ssamem.mas import DEFAULT_MEMORY_CONTENT, build_mas_topology
+from ssamem.memory_actions import (
+    build_answer_prompt,
+    build_memory_request_prompt,
+    format_memory_observation,
+    parse_memory_request,
+)
 from ssamem.tokenizer import SimpleTokenizer
 
 
@@ -468,10 +474,10 @@ class UserSpaceMAS(nn.Module):
                 generation_config=generation_config,
             )
             role_outputs[role_spec.role] = generation.text
-            explicit_pointer_ids = [hit.pointer for hit in resolved.explicit_hits]
-            prefetched_pointer_ids = [hit.pointer for hit in resolved.prefetched_hits]
             prefetched_scores = [hit.score for hit in resolved.prefetched_hits]
-            mounted_pointer_ids = [hit.pointer for hit in resolved.explicit_hits + resolved.prefetched_hits]
+            mounted_pointer_ids = [hit.exact_address for hit in resolved.explicit_hits + resolved.prefetched_hits]
+            explicit_pointer_ids = [hit.exact_address for hit in resolved.explicit_hits]
+            prefetched_pointer_ids = [hit.exact_address for hit in resolved.prefetched_hits]
             mounted_latent_count = len(resolved.mounted_latents)
             mounted_latent_tokens = sum(int(latent.size(0)) for latent in resolved.mounted_latents)
             trace.turns.append(
@@ -487,6 +493,107 @@ class UserSpaceMAS(nn.Module):
                     retrieval_query=ipc_message.content,
                     mounted_latent_count=mounted_latent_count,
                     mounted_latent_tokens=mounted_latent_tokens,
+                )
+            )
+
+        if topology.final_role in role_outputs:
+            trace.final_output = role_outputs[topology.final_role]
+        elif trace.turns:
+            trace.final_output = trace.turns[-1].response
+        return trace
+
+    def run_multi_agent_task_with_memory_actions(
+        self,
+        *,
+        task_description: str,
+        kernel,
+        mas_style: Optional[str] = None,
+        task_domain: Optional[str] = None,
+        memory_content: str = DEFAULT_MEMORY_CONTENT,
+        pointer_table_context: str = "",
+        generation_config: Optional[GenerationConfig] = None,
+        request_generation_config: Optional[GenerationConfig] = None,
+        default_top_k: int = 1,
+        memory_request_policy: str = "auto",
+    ) -> MASExecutionTrace:
+        style = mas_style or self.architecture
+        resolved_task_domain = task_domain or self.task_domain
+        topology = build_mas_topology(style, task_domain=resolved_task_domain)
+        role_outputs: dict[str, str] = {}
+        trace = MASExecutionTrace(architecture=topology.architecture, task_description=task_description)
+
+        for role_spec in topology.roles:
+            role_prompt = role_spec.render_prompt(
+                task_description,
+                role_outputs,
+                feedback_template=topology.feedback_template,
+                memory_content=memory_content or DEFAULT_MEMORY_CONTENT,
+            )
+            request_prompt = build_memory_request_prompt(
+                role_prompt,
+                pointer_table_context,
+                default_top_k=default_top_k,
+                policy=memory_request_policy,
+            )
+            request_generation = self.run_role_turn(
+                content=request_prompt,
+                mounted_latents=[],
+                generation_config=request_generation_config or generation_config,
+            )
+            memory_request = parse_memory_request(
+                request_generation.text,
+                default_query=role_prompt,
+                default_top_k=default_top_k,
+                policy=memory_request_policy,
+            )
+
+            hits = []
+            if memory_request.mode == "GET" and memory_request.address:
+                try:
+                    memory = kernel.get_memory(memory_request.address)
+                    pointer = memory.latent_tensor.pointer or memory_request.address.split(":", 1)[0]
+                    hits = [
+                        kernel.memory_agent.resolve_explicit_pointers(
+                            [f"{pointer}:{memory.local_index:04d}"]
+                        )[0]
+                    ]
+                except Exception:
+                    hits = []
+            elif memory_request.mode == "SEARCH":
+                hits = kernel.search_memory(memory_request.query or role_prompt, top_k=memory_request.top_k)
+
+            memory_observation = format_memory_observation(hits)
+            answer_prompt = build_answer_prompt(role_prompt, memory_observation)
+            generation = self.run_role_turn(
+                content=answer_prompt,
+                mounted_latents=[hit.latent.tensor_data for hit in hits],
+                generation_config=generation_config,
+            )
+            role_outputs[role_spec.role] = generation.text
+            mounted_pointer_ids = [hit.exact_address for hit in hits]
+            mounted_latent_tokens = sum(int(hit.latent.tensor_data.size(0)) for hit in hits)
+            trace.turns.append(
+                MASTurn(
+                    role=role_spec.role,
+                    upstream_roles=list(role_spec.upstream_roles),
+                    prompt=self.build_prompt_for_role(answer_prompt),
+                    response=generation.text,
+                    mounted_pointer_ids=mounted_pointer_ids,
+                    prefetched_pointer_ids=mounted_pointer_ids if memory_request.mode == "SEARCH" else [],
+                    explicit_pointer_ids=mounted_pointer_ids if memory_request.mode == "GET" else [],
+                    prefetched_scores=[hit.score for hit in hits],
+                    retrieval_query=memory_request.query or memory_request.address or "",
+                    mounted_latent_count=len(hits),
+                    mounted_latent_tokens=mounted_latent_tokens,
+                    memory_request={
+                        "mode": memory_request.mode,
+                        "query": memory_request.query,
+                        "address": memory_request.address,
+                        "top_k": memory_request.top_k,
+                        "raw_text": memory_request.raw_text,
+                    },
+                    memory_observation=memory_observation,
+                    request_response=request_generation.text,
                 )
             )
 

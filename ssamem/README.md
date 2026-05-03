@@ -5,6 +5,18 @@ multi-agent systems. It does not depend on the original `latentmem` package.
 
 ## What Is Included
 
+- `cli/`
+  - CLI argument parser for `python -m ssamem`.
+- `commands/`
+  - Thin command handlers grouped by responsibility: data preparation,
+    training, evaluation, MAS memory evaluation, and demos.
+- `workflows/`
+  - Higher-level runnable flows used by CLI commands, including demo runs,
+    text-MAS trajectory collection, experience-bank preload, and MAS memory
+    evaluation.
+- `training/`
+  - SSA trace/data conversion, manifest utilities, distillation, probing, and
+    LMPO-style preference-tuning utilities.
 - `data_models.py`
   - `LatentTensor`, `PageTable`, `AgentMessage`, and kernel-side result types.
 - `userspace.py`
@@ -14,9 +26,9 @@ multi-agent systems. It does not depend on the original `latentmem` package.
 - `kernelspace.py`
   - `MemoryAgent`, `IPCBus`, and `OSKernel` for pointer resolution, MIPS
     retrieval, and episodic consolidation.
-- `trainingspace.py`
-  - SSA manifest builders, hidden-state distillation, pointer preference
-    records, pointer-token setup, and a TRL DPO training wrapper.
+- `trainingspace.py` and `ssa_data.py`
+  - Backward-compatible import shims. New code should prefer
+    `ssamem.training.space` and `ssamem.training.data`.
 - `pipeline.py`
   - A top-level orchestrator that connects kernel-space and user-space.
 - `mas.py`
@@ -28,9 +40,7 @@ multi-agent systems. It does not depend on the original `latentmem` package.
 - `tokenizer.py`
   - A tiny offline tokenizer for fully local demos.
 - `main.py`
-  - CLI entrypoint for demo, distillation, and benchmark runs.
-- `evaluate_triviaqa.py`
-  - Minimal TriviaQA evaluator for `No Memory`, `Text Memory`, and `SSAMem`.
+  - Minimal CLI entrypoint, dependency guard, and command dispatcher.
 
 ## Quick Start
 

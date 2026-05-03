@@ -1,4 +1,4 @@
-name: latentmem
+jhuhhname: latentmem
 channels:
   - nvidia
   - defaults

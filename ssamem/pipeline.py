@@ -6,7 +6,7 @@ import torch
 from transformers import GenerationConfig
 
 from ssamem.config import PipelineConfig
-from ssamem.data_models import AgentMessage, MASExecutionTrace, PipelineRunResult
+from ssamem.data_models import AgentMessage, ClusterMemory, MASExecutionTrace, PipelineRunResult, PointerSearchHit
 from ssamem.kernelspace import MemoryAgent, OSKernel
 from ssamem.retrieval import build_retriever
 from ssamem.storage import PersistentMemoryBackend
@@ -104,10 +104,10 @@ class PointerDrivenSSAMemPipeline:
             mounted_latents=resolved.mounted_latents,
             generation_config=generation_config,
         )
-        explicit_pointer_ids = [hit.pointer for hit in resolved.explicit_hits]
-        prefetched_pointer_ids = [hit.pointer for hit in resolved.prefetched_hits]
+        explicit_pointer_ids = [hit.exact_address for hit in resolved.explicit_hits]
+        prefetched_pointer_ids = [hit.exact_address for hit in resolved.prefetched_hits]
         prefetched_scores = [hit.score for hit in resolved.prefetched_hits]
-        mounted_pointer_ids = [hit.pointer for hit in resolved.explicit_hits + resolved.prefetched_hits]
+        mounted_pointer_ids = [hit.exact_address for hit in resolved.explicit_hits + resolved.prefetched_hits]
         mounted_latent_count = len(resolved.mounted_latents)
         mounted_latent_tokens = sum(int(latent.size(0)) for latent in resolved.mounted_latents)
         return PipelineRunResult(
@@ -142,6 +142,15 @@ class PointerDrivenSSAMemPipeline:
     def load_memory_store(self) -> None:
         self.kernel.memory_agent.load_from_disk(map_location=self.userspace.device)
 
+    def pointer_table_context(self, *, max_entries: Optional[int] = None) -> str:
+        return self.kernel.pointer_table_context(max_entries=max_entries)
+
+    def search_memory(self, intent_text: str, *, top_k: int = 1) -> list[PointerSearchHit]:
+        return self.kernel.search_memory(intent_text, top_k=top_k)
+
+    def get_memory(self, address: str) -> ClusterMemory:
+        return self.kernel.get_memory(address)
+
     def run_multi_agent_task(
         self,
         task_description: str,
@@ -149,9 +158,19 @@ class PointerDrivenSSAMemPipeline:
         mas_style: str = "camel",
         task_domain: Optional[str] = None,
         memory_content: str = "[mounted-latent-memory]",
+        include_pointer_table: bool = False,
+        pointer_table_max_entries: Optional[int] = None,
         generation_config: Optional[GenerationConfig] = None,
         top_k_prefetch: Optional[int] = None,
     ) -> MASExecutionTrace:
+        if include_pointer_table:
+            memory_content = (
+                f"{self.pointer_table_context(max_entries=pointer_table_max_entries)}\n\n"
+                "[Memory Agent Protocol]\n"
+                "Use SEARCH by describing the needed skill/memory when no exact address is known. "
+                "Use GET with an exact address like <PTR_0x001>:0000 when available.\n\n"
+                f"{memory_content}"
+            ).strip()
         return self.userspace.run_multi_agent_task(
             task_description=task_description,
             kernel=self.kernel,
@@ -160,4 +179,36 @@ class PointerDrivenSSAMemPipeline:
             memory_content=memory_content,
             generation_config=generation_config,
             top_k_prefetch=self.top_k_prefetch if top_k_prefetch is None else top_k_prefetch,
+        )
+
+    def run_multi_agent_task_with_memory_actions(
+        self,
+        task_description: str,
+        *,
+        mas_style: str = "camel",
+        task_domain: Optional[str] = None,
+        memory_content: str = "[mounted-latent-memory]",
+        pointer_table_max_entries: Optional[int] = None,
+        generation_config: Optional[GenerationConfig] = None,
+        request_generation_config: Optional[GenerationConfig] = None,
+        default_top_k: int = 1,
+        memory_request_policy: str = "auto",
+    ) -> MASExecutionTrace:
+        pointer_table_context = (
+            f"{self.pointer_table_context(max_entries=pointer_table_max_entries)}\n\n"
+            "[Memory Agent Protocol]\n"
+            "The MAS agent must explicitly request memory before answering. "
+            "Use SEARCH when it only knows a summary key; use GET for exact addresses."
+        )
+        return self.userspace.run_multi_agent_task_with_memory_actions(
+            task_description=task_description,
+            kernel=self.kernel,
+            mas_style=mas_style,
+            task_domain=task_domain,
+            memory_content=memory_content,
+            pointer_table_context=pointer_table_context,
+            generation_config=generation_config,
+            request_generation_config=request_generation_config,
+            default_top_k=default_top_k,
+            memory_request_policy=memory_request_policy,
         )
