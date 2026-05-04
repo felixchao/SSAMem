@@ -56,14 +56,22 @@ def build_memory_request_prompt(
     role_prompt: str,
     pointer_table_context: str,
     *,
+    task_query: str = "",
     default_top_k: int = 1,
     policy: str = "auto",
 ) -> str:
     if policy == "require-search":
+        task_block = f"[Current Task]\n{task_query or role_prompt}\n\n"
         instruction = (
             "You must request memory before answering. Return exactly one line:\n"
             f"SEARCH: <brief query about the current task>; top_k={default_top_k}"
         )
+        return (
+            f"{task_block}"
+            f"{pointer_table_context}\n\n"
+            "[Memory Access Decision]\n"
+            f"{instruction}\n"
+        ).strip()
     else:
         instruction = (
             "Before answering, decide whether you need latent memory from the MemoryAgent.\n"

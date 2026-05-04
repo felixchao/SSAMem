@@ -7,6 +7,7 @@ from typing import Any
 import torch
 from transformers import GenerationConfig
 
+from ssamem.data_models import LatentTensor
 from ssamem.training.space import SSAManifestDataset, _resolve_latent_path, target_text_hit
 
 
@@ -23,8 +24,8 @@ def _registered_address(pipeline, pointer: str, *, sample_index: int) -> tuple[s
     return f"{pointer}:{local_index:04d}", local_index, cluster.cluster_size
 
 
-def preload_experience_bank(pipeline, distiller, dataset: SSAManifestDataset, *, limit: int) -> list[dict[str, Any]]:
-    pointer_rows: list[dict[str, Any]] = []
+def _project_experience_latents(pipeline, distiller, dataset: SSAManifestDataset, *, limit: int) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
     for idx, sample in enumerate(dataset.samples):
         if idx >= limit:
             break
@@ -32,32 +33,152 @@ def preload_experience_bank(pipeline, distiller, dataset: SSAManifestDataset, *,
         latent_tensor = torch.load(latent_path, map_location=pipeline.userspace.device)
         with torch.no_grad():
             projected_latent = distiller.student.project_latents([sample.student_text()], [latent_tensor])[0].detach()
-        pointer = pipeline.register_memory_tensor(
-            projected_latent,
-            utility_score=1.0,
-            metadata={
-                "source": "experience_bank",
-                "sample_index": idx,
-                "task_prompt": sample.task_prompt,
-                "target_text": sample.target_text,
-                "latent_tensor_path": str(latent_path),
-                "topic": sample.task_prompt,
-            },
-        )
-        address, local_index, cluster_size = _registered_address(pipeline, pointer, sample_index=idx)
-        pointer_rows.append(
+        prepared_tensor = pipeline.kernel.memory_agent._prepare_tensor_data(projected_latent)
+        key_vector = pipeline.kernel.memory_agent.build_key_vector(prepared_tensor)
+        records.append(
             {
                 "sample_index": idx,
-                "key": sample.task_prompt,
-                "target_text": sample.target_text,
-                "pointer": pointer,
-                "address": address,
-                "local_index": local_index,
-                "cluster_size": cluster_size,
-                "latent_tensor_path": str(latent_path),
+                "sample": sample,
+                "latent_path": latent_path,
+                "latent": LatentTensor(
+                    tensor_data=prepared_tensor,
+                    key_vector=key_vector,
+                    utility_score=1.0,
+                    metadata={
+                        "source": "experience_bank",
+                        "sample_index": idx,
+                        "task_prompt": sample.task_prompt,
+                        "target_text": sample.target_text,
+                        "latent_tensor_path": str(latent_path),
+                        "topic": sample.task_prompt,
+                        "summary": sample.task_prompt,
+                    },
+                ),
             }
         )
+    return records
+
+
+def _pointer_row_for_record(pipeline, record: dict[str, Any], pointer: str) -> dict[str, Any]:
+    sample = record["sample"]
+    idx = int(record["sample_index"])
+    address, local_index, cluster_size = _registered_address(pipeline, pointer, sample_index=idx)
+    return {
+        "sample_index": idx,
+        "key": sample.task_prompt,
+        "target_text": sample.target_text,
+        "pointer": pointer,
+        "address": address,
+        "local_index": local_index,
+        "cluster_size": cluster_size,
+        "latent_tensor_path": str(record["latent_path"]),
+    }
+
+
+def _kmeans_assignments(
+    key_vectors: torch.Tensor,
+    *,
+    num_clusters: int,
+    max_iter: int = 50,
+    seed: int = 7,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    count = int(key_vectors.size(0))
+    if count == 0:
+        return torch.empty(0, dtype=torch.long), torch.empty(0, key_vectors.size(-1))
+    k = max(1, min(int(num_clusters), count))
+    vectors = torch.nn.functional.normalize(key_vectors.float(), dim=-1)
+    generator = torch.Generator(device="cpu").manual_seed(int(seed))
+    init_indices = torch.randperm(count, generator=generator)[:k].to(vectors.device)
+    centroids = vectors[init_indices].clone()
+    assignments = torch.full((count,), -1, dtype=torch.long, device=vectors.device)
+    for _ in range(max(int(max_iter), 1)):
+        next_assignments = (vectors @ centroids.T).argmax(dim=1)
+        if torch.equal(next_assignments, assignments):
+            assignments = next_assignments
+            break
+        assignments = next_assignments
+        for cluster_index in range(k):
+            mask = assignments == cluster_index
+            if bool(mask.any()):
+                centroids[cluster_index] = torch.nn.functional.normalize(vectors[mask].mean(dim=0), dim=0)
+    return assignments.cpu(), centroids.detach().cpu()
+
+
+def _preload_experience_bank_online(pipeline, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    pointer_rows: list[dict[str, Any]] = []
+    for record in records:
+        pointer = pipeline.kernel.memory_agent.register_latent(record["latent"])
+        pointer_rows.append(_pointer_row_for_record(pipeline, record, pointer))
     return pointer_rows
+
+
+def _preload_experience_bank_kmeans(
+    pipeline,
+    records: list[dict[str, Any]],
+    *,
+    kmeans_clusters: int,
+    kmeans_max_iter: int,
+    seed: int,
+) -> list[dict[str, Any]]:
+    if not records:
+        return []
+    key_vectors = torch.stack([record["latent"].key_vector.detach().cpu().float() for record in records], dim=0)
+    assignments, centroids = _kmeans_assignments(
+        key_vectors,
+        num_clusters=kmeans_clusters,
+        max_iter=kmeans_max_iter,
+        seed=seed,
+    )
+    pointer_rows: list[dict[str, Any]] = []
+    for cluster_index in range(int(centroids.size(0))):
+        member_indices = [idx for idx, assignment in enumerate(assignments.tolist()) if assignment == cluster_index]
+        if not member_indices:
+            continue
+        centroid = centroids[cluster_index]
+        member_vectors = key_vectors[member_indices]
+        scores = torch.nn.functional.normalize(member_vectors, dim=-1) @ torch.nn.functional.normalize(centroid, dim=0)
+        representative_member = member_indices[int(scores.argmax().item())]
+        ordered_indices = [representative_member] + [idx for idx in member_indices if idx != representative_member]
+        latents = [records[idx]["latent"] for idx in ordered_indices]
+        representative = records[representative_member]["sample"]
+        cluster = pipeline.kernel.memory_agent.register_latent_cluster(
+            latents,
+            summary_key_text=representative.task_prompt,
+            summary_key_embedding=centroid.to(latents[0].key_vector.device, dtype=latents[0].key_vector.dtype),
+            metadata={
+                "source": "experience_bank",
+                "cluster_method": "offline-kmeans",
+                "kmeans_cluster_index": cluster_index,
+            },
+        )
+        for idx in ordered_indices:
+            pointer_rows.append(_pointer_row_for_record(pipeline, records[idx], cluster.pointer_id or ""))
+    return sorted(pointer_rows, key=lambda row: int(row["sample_index"]))
+
+
+def preload_experience_bank(
+    pipeline,
+    distiller,
+    dataset: SSAManifestDataset,
+    *,
+    limit: int,
+    cluster_method: str = "online",
+    kmeans_clusters: int = 50,
+    kmeans_max_iter: int = 50,
+    seed: int = 7,
+) -> list[dict[str, Any]]:
+    records = _project_experience_latents(pipeline, distiller, dataset, limit=limit)
+    if cluster_method == "online":
+        return _preload_experience_bank_online(pipeline, records)
+    if cluster_method == "offline-kmeans":
+        return _preload_experience_bank_kmeans(
+            pipeline,
+            records,
+            kmeans_clusters=kmeans_clusters,
+            kmeans_max_iter=kmeans_max_iter,
+            seed=seed,
+        )
+    raise ValueError(f"Unsupported cluster_method: {cluster_method}")
 
 
 def memory_agent_protocol_context(pipeline, *, max_entries: int | None = None) -> str:
@@ -191,8 +312,21 @@ def evaluate_mas_memory_search(
     max_new_tokens: int,
     mas_style: str,
     task_domain: str | None,
+    cluster_method: str = "online",
+    kmeans_clusters: int = 50,
+    kmeans_max_iter: int = 50,
+    seed: int = 7,
 ) -> dict[str, Any]:
-    pointer_rows = preload_experience_bank(pipeline, distiller, bank_dataset, limit=bank_limit)
+    pointer_rows = preload_experience_bank(
+        pipeline,
+        distiller,
+        bank_dataset,
+        limit=bank_limit,
+        cluster_method=cluster_method,
+        kmeans_clusters=kmeans_clusters,
+        kmeans_max_iter=kmeans_max_iter,
+        seed=seed,
+    )
     generation_config = GenerationConfig(
         do_sample=False,
         max_new_tokens=max_new_tokens,
@@ -271,6 +405,8 @@ def evaluate_mas_memory_search(
         "checkpoint": checkpoint,
         "bank_count": len(pointer_rows),
         "bank_clusters": len(pipeline.kernel.memory_agent.memory_clusters),
+        "cluster_method": cluster_method,
+        "kmeans_clusters": kmeans_clusters if cluster_method == "offline-kmeans" else None,
         "pointer_table": pipeline.kernel.memory_agent.pointer_table_rows(max_entries=bank_limit),
         "memory_agent_protocol": "SEARCH over summary keys when no exact address is known; GET by exact address when provided.",
         "count": len(examples),
@@ -300,8 +436,21 @@ def evaluate_mas_memory_agent_loop(
     max_new_tokens: int,
     mas_style: str,
     task_domain: str | None,
+    cluster_method: str = "online",
+    kmeans_clusters: int = 50,
+    kmeans_max_iter: int = 50,
+    seed: int = 7,
 ) -> dict[str, Any]:
-    pointer_rows = preload_experience_bank(pipeline, distiller, bank_dataset, limit=bank_limit)
+    pointer_rows = preload_experience_bank(
+        pipeline,
+        distiller,
+        bank_dataset,
+        limit=bank_limit,
+        cluster_method=cluster_method,
+        kmeans_clusters=kmeans_clusters,
+        kmeans_max_iter=kmeans_max_iter,
+        seed=seed,
+    )
     generation_config = GenerationConfig(
         do_sample=False,
         max_new_tokens=max_new_tokens,
@@ -363,6 +512,8 @@ def evaluate_mas_memory_agent_loop(
         "checkpoint": checkpoint,
         "bank_count": len(pointer_rows),
         "bank_clusters": len(pipeline.kernel.memory_agent.memory_clusters),
+        "cluster_method": cluster_method,
+        "kmeans_clusters": kmeans_clusters if cluster_method == "offline-kmeans" else None,
         "pointer_table": pipeline.kernel.memory_agent.pointer_table_rows(max_entries=bank_limit),
         "count": len(examples),
         "target_hit": {"agent_memory_loop": _summarize_binary(loop_hits)},

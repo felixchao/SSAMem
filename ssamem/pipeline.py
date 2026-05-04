@@ -43,6 +43,8 @@ class PointerDrivenSSAMemPipeline:
             latent_window=config.kernel.latent_window,
             persistence=persistence,
             autosave=config.kernel.autosave,
+            cluster_assignment_threshold=config.kernel.cluster_assignment_threshold,
+            cluster_assignment_top_k=config.kernel.cluster_assignment_top_k,
         )
         retriever = build_retriever(
             config.kernel.retriever_type,

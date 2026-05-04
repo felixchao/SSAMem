@@ -532,6 +532,7 @@ class UserSpaceMAS(nn.Module):
             request_prompt = build_memory_request_prompt(
                 role_prompt,
                 pointer_table_context,
+                task_query=task_description,
                 default_top_k=default_top_k,
                 policy=memory_request_policy,
             )
@@ -542,7 +543,7 @@ class UserSpaceMAS(nn.Module):
             )
             memory_request = parse_memory_request(
                 request_generation.text,
-                default_query=role_prompt,
+                default_query=task_description,
                 default_top_k=default_top_k,
                 policy=memory_request_policy,
             )
@@ -560,7 +561,7 @@ class UserSpaceMAS(nn.Module):
                 except Exception:
                     hits = []
             elif memory_request.mode == "SEARCH":
-                hits = kernel.search_memory(memory_request.query or role_prompt, top_k=memory_request.top_k)
+                hits = kernel.search_memory(memory_request.query or task_description, top_k=memory_request.top_k)
 
             memory_observation = format_memory_observation(hits)
             answer_prompt = build_answer_prompt(role_prompt, memory_observation)

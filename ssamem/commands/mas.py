@@ -58,13 +58,24 @@ def run_build_experience_bank(args) -> None:
     pipeline, distiller = _build_ssa_distiller_for_eval(args)
     load_alignment_checkpoint(distiller, args.checkpoint, map_location=args.device)
     dataset = SSAManifestDataset(manifest_path, map_location=args.device)
-    pointer_rows = preload_experience_bank(pipeline, distiller, dataset, limit=args.limit)
+    pointer_rows = preload_experience_bank(
+        pipeline,
+        distiller,
+        dataset,
+        limit=args.limit,
+        cluster_method=args.cluster_method,
+        kmeans_clusters=args.kmeans_clusters,
+        kmeans_max_iter=args.kmeans_max_iter,
+        seed=args.seed,
+    )
     payload = {
         "manifest": manifest_path,
         "checkpoint": args.checkpoint,
         "count": len(pointer_rows),
         "clusters": len(pipeline.kernel.memory_agent.memory_clusters),
         "memories": len(pipeline.kernel.memory_agent.memory_store),
+        "cluster_method": args.cluster_method,
+        "kmeans_clusters": args.kmeans_clusters if args.cluster_method == "offline-kmeans" else None,
         "pointer_table": pointer_rows,
     }
     output_path = resolve_output_path(args)
@@ -100,6 +111,10 @@ def run_eval_mas_memory_search(args) -> None:
         bank_limit=args.bank_limit,
         limit=args.limit,
         top_k_prefetch=args.top_k_prefetch,
+        cluster_method=args.cluster_method,
+        kmeans_clusters=args.kmeans_clusters,
+        kmeans_max_iter=args.kmeans_max_iter,
+        seed=args.seed,
         max_new_tokens=args.max_new_tokens,
         mas_style=args.mas_style,
         task_domain=args.task_domain,
@@ -135,6 +150,10 @@ def run_eval_mas_memory_agent_loop(args) -> None:
         limit=args.limit,
         top_k=args.top_k,
         memory_request_policy=args.memory_request_policy,
+        cluster_method=args.cluster_method,
+        kmeans_clusters=args.kmeans_clusters,
+        kmeans_max_iter=args.kmeans_max_iter,
+        seed=args.seed,
         max_new_tokens=args.max_new_tokens,
         mas_style=args.mas_style,
         task_domain=args.task_domain,
@@ -164,12 +183,23 @@ def run_query_memory_agent(args) -> None:
     pipeline, distiller = _build_ssa_distiller_for_eval(args)
     load_alignment_checkpoint(distiller, args.checkpoint, map_location=args.device)
     dataset = SSAManifestDataset(manifest_path, map_location=args.device)
-    pointer_rows = preload_experience_bank(pipeline, distiller, dataset, limit=args.limit)
+    pointer_rows = preload_experience_bank(
+        pipeline,
+        distiller,
+        dataset,
+        limit=args.limit,
+        cluster_method=args.cluster_method,
+        kmeans_clusters=args.kmeans_clusters,
+        kmeans_max_iter=args.kmeans_max_iter,
+        seed=args.seed,
+    )
 
     payload = {
         "manifest": manifest_path,
         "checkpoint": args.checkpoint,
         "bank_count": len(pointer_rows),
+        "cluster_method": args.cluster_method,
+        "kmeans_clusters": args.kmeans_clusters if args.cluster_method == "offline-kmeans" else None,
         "pointer_table": pipeline.kernel.memory_agent.pointer_table_rows(max_entries=args.limit),
     }
 

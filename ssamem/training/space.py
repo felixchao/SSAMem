@@ -1065,12 +1065,25 @@ def compute_keyword_recall(reference_keywords: Sequence[str], generated_text: st
     return float(hits / max(len(reference_keywords), 1))
 
 
+_ANSWER_TAG_PATTERN = re.compile(r"<answer>\s*(.*?)\s*</answer>", re.IGNORECASE | re.DOTALL)
+
+
+def _answer_tag_spans(generated_text: str) -> list[str]:
+    return [match.strip() for match in _ANSWER_TAG_PATTERN.findall(generated_text or "") if match.strip()]
+
+
 def target_text_hit(target_text: str | None, generated_text: str) -> bool:
     if not target_text:
         return False
     normalized_target = re.sub(r"[^a-z0-9 ]+", " ", target_text.lower()).strip()
     if not normalized_target:
         return False
+    answer_spans = _answer_tag_spans(generated_text)
+    if answer_spans:
+        return any(
+            normalized_target in re.sub(r"[^a-z0-9 ]+", " ", span.lower())
+            for span in answer_spans
+        )
     normalized_output = re.sub(r"[^a-z0-9 ]+", " ", generated_text.lower())
     return normalized_target in normalized_output
 

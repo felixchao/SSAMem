@@ -34,6 +34,8 @@ class KernelConfig:
     reward_threshold: float = 0.0
     latent_window: int = 8
     top_k_prefetch: int = 1
+    cluster_assignment_threshold: float = 0.95
+    cluster_assignment_top_k: int = 4
     storage_root: Optional[str] = None
     autosave: bool = True
     autoload: bool = True

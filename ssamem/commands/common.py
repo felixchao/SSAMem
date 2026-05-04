@@ -73,6 +73,8 @@ def build_pipeline_from_args(args) -> PointerDrivenSSAMemPipeline:
         kernel=KernelConfig(
             top_k_prefetch=getattr(args, "top_k_prefetch", 1),
             storage_root=getattr(args, "storage_root", None),
+            cluster_assignment_threshold=getattr(args, "cluster_assignment_threshold", 0.95),
+            cluster_assignment_top_k=getattr(args, "cluster_assignment_top_k", 4),
         ),
         mas=MASConfig(
             architecture=getattr(args, "mas_style", "camel"),
@@ -126,6 +128,12 @@ def build_training_args_from_config(config: dict[str, Any], args):
     )
     resolved.load_in_4bit = bool(training.get("load_in_4bit", runtime.get("load_in_4bit", False)))
     resolved.storage_root = kernel.get("storage_root", getattr(args, "storage_root", None))
+    resolved.cluster_assignment_threshold = float(
+        kernel.get("cluster_assignment_threshold", getattr(args, "cluster_assignment_threshold", 0.95))
+    )
+    resolved.cluster_assignment_top_k = int(
+        kernel.get("cluster_assignment_top_k", getattr(args, "cluster_assignment_top_k", 4))
+    )
     resolved.lr = float(training.get("learning_rate", getattr(args, "lr", 1e-3)))
     resolved.epochs = int(training.get("epochs", getattr(args, "epochs", 1)))
     resolved.batch_size = int(training.get("batch_size", getattr(args, "batch_size", 1)))

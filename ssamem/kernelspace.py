@@ -365,6 +365,33 @@ class MemoryAgent(nn.Module):
             timestamp=timestamp,
         )
 
+    def register_latent_cluster(
+        self,
+        latents: Sequence[LatentTensor],
+        *,
+        summary_key_text: str = "",
+        summary_key_embedding: Optional[torch.Tensor] = None,
+        metadata: Optional[dict] = None,
+    ) -> MemoryCluster:
+        if not latents:
+            raise ValueError("`latents` must contain at least one latent tensor.")
+        first_metadata = {**dict(latents[0].metadata or {}), **dict(metadata or {})}
+        cluster = self.create_cluster_from_latent(
+            latents[0],
+            summary_key_text=summary_key_text,
+            summary_key_embedding=summary_key_embedding
+            if summary_key_embedding is not None
+            else latents[0].key_vector.detach().clone(),
+            metadata=first_metadata,
+        )
+        for latent in latents[1:]:
+            self._append_prebuilt_latent_to_cluster(
+                cluster,
+                latent,
+                metadata={**dict(latent.metadata or {}), **dict(metadata or {})},
+            )
+        return cluster
+
     def add_tensor(
         self,
         tensor_data: torch.Tensor,

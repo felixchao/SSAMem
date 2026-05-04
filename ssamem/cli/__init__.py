@@ -42,6 +42,17 @@ def add_mas_eval_args(parser: argparse.ArgumentParser, *, default_tokens: int = 
     parser.add_argument("--output-path", default=None)
 
 
+def add_experience_clustering_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--cluster-method",
+        default="online",
+        choices=["online", "offline-kmeans"],
+        help="How to group projected experience memories into pointer clusters.",
+    )
+    parser.add_argument("--kmeans-clusters", type=int, default=50)
+    parser.add_argument("--kmeans-max-iter", type=int, default=50)
+
+
 def add_checkpoint_eval_args(parser: argparse.ArgumentParser, *, required: bool = False) -> None:
     parser.add_argument("--checkpoint", required=required, default=None)
     parser.add_argument("--limit", type=int, default=20)
@@ -212,6 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
     experience_bank_parser.add_argument("--limit", type=int, default=100)
     experience_bank_parser.add_argument("--output-path", default=None)
     experience_bank_parser.add_argument("--pointer-table-path", default=None)
+    add_experience_clustering_args(experience_bank_parser)
     add_shared_run_args(experience_bank_parser)
 
     mas_search_eval_parser = subparsers.add_parser(
@@ -226,6 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
     mas_search_eval_parser.add_argument("--limit", type=int, default=20)
     mas_search_eval_parser.add_argument("--bank-limit", type=int, default=200)
     mas_search_eval_parser.add_argument("--top-k-prefetch", type=int, default=1)
+    add_experience_clustering_args(mas_search_eval_parser)
     add_mas_eval_args(mas_search_eval_parser, default_tokens=32)
     add_shared_run_args(mas_search_eval_parser)
 
@@ -241,6 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
     mas_loop_eval_parser.add_argument("--limit", type=int, default=20)
     mas_loop_eval_parser.add_argument("--bank-limit", type=int, default=200)
     mas_loop_eval_parser.add_argument("--top-k", type=int, default=1)
+    add_experience_clustering_args(mas_loop_eval_parser)
     mas_loop_eval_parser.add_argument(
         "--memory-request-policy",
         default="require-search",
@@ -262,6 +276,7 @@ def build_parser() -> argparse.ArgumentParser:
     query_memory_parser.add_argument("--limit", type=int, default=100, help="Number of memories to preload.")
     query_memory_parser.add_argument("--top-k", type=int, default=3)
     query_memory_parser.add_argument("--output-path", default=None)
+    add_experience_clustering_args(query_memory_parser)
     add_shared_run_args(query_memory_parser)
 
     lmpo_rollout_parser = subparsers.add_parser(
