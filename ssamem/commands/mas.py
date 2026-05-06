@@ -12,6 +12,34 @@ from ssamem.commands.common import (
 )
 
 
+def _attach_retrieval_checkpoint(pipeline, args):
+    checkpoint = getattr(args, "retrieval_checkpoint", None)
+    if not checkpoint:
+        return None
+    import torch
+    from ssamem.retrieval import DenseInnerProductRetriever, RandomHyperplaneLSHIndex
+    from ssamem.retrieval_training import (
+        RetrievalAlignmentModel,
+        RetrievalModelConfig,
+        load_retrieval_checkpoint,
+    )
+
+    payload = torch.load(checkpoint, map_location="cpu")
+    retrieval_config = RetrievalModelConfig(**payload["retrieval_config"])
+    retrieval_model = RetrievalAlignmentModel(pipeline.userspace, retrieval_config).to(args.device)
+    load_retrieval_checkpoint(retrieval_model, checkpoint, map_location=args.device)
+    retrieval_model.eval()
+
+    key_dim = retrieval_config.key_dim
+    pipeline.kernel.memory_agent.key_dim = key_dim
+    pipeline.kernel.memory_agent.cluster_assignment_lsh = RandomHyperplaneLSHIndex(key_dim)
+    pipeline.kernel.retriever = DenseInnerProductRetriever(
+        query_encoder=retrieval_model.query_encoder,
+        lsh_index=RandomHyperplaneLSHIndex(key_dim),
+    )
+    return retrieval_model
+
+
 def run_eval_mas_latent_memory(args) -> None:
     import torch
     from ssamem.workflows.experience import evaluate_mas_latent_memory
@@ -56,6 +84,7 @@ def run_build_experience_bank(args) -> None:
     if not manifest_path:
         raise SystemExit("build-experience-bank requires --manifest or data.manifest in config.")
     pipeline, distiller = _build_ssa_distiller_for_eval(args)
+    retrieval_model = _attach_retrieval_checkpoint(pipeline, args)
     load_alignment_checkpoint(distiller, args.checkpoint, map_location=args.device)
     dataset = SSAManifestDataset(manifest_path, map_location=args.device)
     pointer_rows = preload_experience_bank(
@@ -67,6 +96,7 @@ def run_build_experience_bank(args) -> None:
         kmeans_clusters=args.kmeans_clusters,
         kmeans_max_iter=args.kmeans_max_iter,
         seed=args.seed,
+        retrieval_model=retrieval_model,
     )
     payload = {
         "manifest": manifest_path,
@@ -76,6 +106,8 @@ def run_build_experience_bank(args) -> None:
         "memories": len(pipeline.kernel.memory_agent.memory_store),
         "cluster_method": args.cluster_method,
         "kmeans_clusters": args.kmeans_clusters if args.cluster_method == "offline-kmeans" else None,
+        "retrieval_checkpoint": getattr(args, "retrieval_checkpoint", None),
+        "retrieval_checkpoint_loaded": retrieval_model is not None,
         "pointer_table": pointer_rows,
     }
     output_path = resolve_output_path(args)
@@ -97,6 +129,7 @@ def run_eval_mas_memory_search(args) -> None:
     config = load_config_file(args.config) if args.config else {}
     args = build_training_args_from_config(config, args) if config else args
     pipeline, distiller = _build_ssa_distiller_for_eval(args)
+    retrieval_model = _attach_retrieval_checkpoint(pipeline, args)
     load_alignment_checkpoint(distiller, args.checkpoint, map_location=args.device)
     bank_dataset = SSAManifestDataset(args.bank_manifest, map_location=args.device)
     eval_dataset = SSAManifestDataset(args.eval_manifest, map_location=args.device)
@@ -115,6 +148,7 @@ def run_eval_mas_memory_search(args) -> None:
         kmeans_clusters=args.kmeans_clusters,
         kmeans_max_iter=args.kmeans_max_iter,
         seed=args.seed,
+        retrieval_model=retrieval_model,
         max_new_tokens=args.max_new_tokens,
         mas_style=args.mas_style,
         task_domain=args.task_domain,
@@ -135,6 +169,7 @@ def run_eval_mas_memory_agent_loop(args) -> None:
     config = load_config_file(args.config) if args.config else {}
     args = build_training_args_from_config(config, args) if config else args
     pipeline, distiller = _build_ssa_distiller_for_eval(args)
+    retrieval_model = _attach_retrieval_checkpoint(pipeline, args)
     load_alignment_checkpoint(distiller, args.checkpoint, map_location=args.device)
     bank_dataset = SSAManifestDataset(args.bank_manifest, map_location=args.device)
     eval_dataset = SSAManifestDataset(args.eval_manifest, map_location=args.device)
@@ -154,6 +189,7 @@ def run_eval_mas_memory_agent_loop(args) -> None:
         kmeans_clusters=args.kmeans_clusters,
         kmeans_max_iter=args.kmeans_max_iter,
         seed=args.seed,
+        retrieval_model=retrieval_model,
         max_new_tokens=args.max_new_tokens,
         mas_style=args.mas_style,
         task_domain=args.task_domain,
@@ -181,6 +217,7 @@ def run_query_memory_agent(args) -> None:
         raise SystemExit("query-memory-agent requires --manifest or data.manifest in config.")
 
     pipeline, distiller = _build_ssa_distiller_for_eval(args)
+    retrieval_model = _attach_retrieval_checkpoint(pipeline, args)
     load_alignment_checkpoint(distiller, args.checkpoint, map_location=args.device)
     dataset = SSAManifestDataset(manifest_path, map_location=args.device)
     pointer_rows = preload_experience_bank(
@@ -192,6 +229,7 @@ def run_query_memory_agent(args) -> None:
         kmeans_clusters=args.kmeans_clusters,
         kmeans_max_iter=args.kmeans_max_iter,
         seed=args.seed,
+        retrieval_model=retrieval_model,
     )
 
     payload = {
@@ -200,6 +238,8 @@ def run_query_memory_agent(args) -> None:
         "bank_count": len(pointer_rows),
         "cluster_method": args.cluster_method,
         "kmeans_clusters": args.kmeans_clusters if args.cluster_method == "offline-kmeans" else None,
+        "retrieval_checkpoint": getattr(args, "retrieval_checkpoint", None),
+        "retrieval_checkpoint_loaded": retrieval_model is not None,
         "pointer_table": pipeline.kernel.memory_agent.pointer_table_rows(max_entries=args.limit),
     }
 

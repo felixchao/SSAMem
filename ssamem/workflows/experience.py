@@ -24,7 +24,14 @@ def _registered_address(pipeline, pointer: str, *, sample_index: int) -> tuple[s
     return f"{pointer}:{local_index:04d}", local_index, cluster.cluster_size
 
 
-def _project_experience_latents(pipeline, distiller, dataset: SSAManifestDataset, *, limit: int) -> list[dict[str, Any]]:
+def _project_experience_latents(
+    pipeline,
+    distiller,
+    dataset: SSAManifestDataset,
+    *,
+    limit: int,
+    retrieval_model=None,
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for idx, sample in enumerate(dataset.samples):
         if idx >= limit:
@@ -34,7 +41,13 @@ def _project_experience_latents(pipeline, distiller, dataset: SSAManifestDataset
         with torch.no_grad():
             projected_latent = distiller.student.project_latents([sample.student_text()], [latent_tensor])[0].detach()
         prepared_tensor = pipeline.kernel.memory_agent._prepare_tensor_data(projected_latent)
-        key_vector = pipeline.kernel.memory_agent.build_key_vector(prepared_tensor)
+        if retrieval_model is None:
+            key_vector = pipeline.kernel.memory_agent.build_key_vector(prepared_tensor)
+        else:
+            with torch.no_grad():
+                # Retrieval alignment is trained against the original trajectory latent,
+                # while prompt injection uses the composer-projected latent.
+                key_vector = retrieval_model.encode_memories([latent_tensor])[0].detach().float().cpu()
         records.append(
             {
                 "sample_index": idx,
@@ -166,8 +179,15 @@ def preload_experience_bank(
     kmeans_clusters: int = 50,
     kmeans_max_iter: int = 50,
     seed: int = 7,
+    retrieval_model=None,
 ) -> list[dict[str, Any]]:
-    records = _project_experience_latents(pipeline, distiller, dataset, limit=limit)
+    records = _project_experience_latents(
+        pipeline,
+        distiller,
+        dataset,
+        limit=limit,
+        retrieval_model=retrieval_model,
+    )
     if cluster_method == "online":
         return _preload_experience_bank_online(pipeline, records)
     if cluster_method == "offline-kmeans":
@@ -316,6 +336,7 @@ def evaluate_mas_memory_search(
     kmeans_clusters: int = 50,
     kmeans_max_iter: int = 50,
     seed: int = 7,
+    retrieval_model=None,
 ) -> dict[str, Any]:
     pointer_rows = preload_experience_bank(
         pipeline,
@@ -326,6 +347,7 @@ def evaluate_mas_memory_search(
         kmeans_clusters=kmeans_clusters,
         kmeans_max_iter=kmeans_max_iter,
         seed=seed,
+        retrieval_model=retrieval_model,
     )
     generation_config = GenerationConfig(
         do_sample=False,
@@ -407,6 +429,7 @@ def evaluate_mas_memory_search(
         "bank_clusters": len(pipeline.kernel.memory_agent.memory_clusters),
         "cluster_method": cluster_method,
         "kmeans_clusters": kmeans_clusters if cluster_method == "offline-kmeans" else None,
+        "retrieval_checkpoint_loaded": retrieval_model is not None,
         "pointer_table": pipeline.kernel.memory_agent.pointer_table_rows(max_entries=bank_limit),
         "memory_agent_protocol": "SEARCH over summary keys when no exact address is known; GET by exact address when provided.",
         "count": len(examples),
@@ -440,6 +463,7 @@ def evaluate_mas_memory_agent_loop(
     kmeans_clusters: int = 50,
     kmeans_max_iter: int = 50,
     seed: int = 7,
+    retrieval_model=None,
 ) -> dict[str, Any]:
     pointer_rows = preload_experience_bank(
         pipeline,
@@ -450,6 +474,7 @@ def evaluate_mas_memory_agent_loop(
         kmeans_clusters=kmeans_clusters,
         kmeans_max_iter=kmeans_max_iter,
         seed=seed,
+        retrieval_model=retrieval_model,
     )
     generation_config = GenerationConfig(
         do_sample=False,
@@ -514,6 +539,7 @@ def evaluate_mas_memory_agent_loop(
         "bank_clusters": len(pipeline.kernel.memory_agent.memory_clusters),
         "cluster_method": cluster_method,
         "kmeans_clusters": kmeans_clusters if cluster_method == "offline-kmeans" else None,
+        "retrieval_checkpoint_loaded": retrieval_model is not None,
         "pointer_table": pipeline.kernel.memory_agent.pointer_table_rows(max_entries=bank_limit),
         "count": len(examples),
         "target_hit": {"agent_memory_loop": _summarize_binary(loop_hits)},

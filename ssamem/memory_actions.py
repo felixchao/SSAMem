@@ -24,7 +24,8 @@ def parse_memory_request(
         match = _ACTION_PATTERN.match(line.strip())
         if match is not None:
             break
-    if normalized_policy == "require-search" and match is None:
+    search_only = normalized_policy in {"require-search", "search-only"}
+    if search_only and match is None:
         return MemoryRequest(mode="SEARCH", query=default_query, top_k=default_top_k, raw_text=raw)
     if match is None and raw.lower().startswith("no memory"):
         return MemoryRequest(mode="NONE", query=default_query, top_k=default_top_k, raw_text=raw)
@@ -38,6 +39,9 @@ def parse_memory_request(
     if top_k_match:
         top_k = max(int(top_k_match.group(1)), 1)
         payload = _TOP_K_PATTERN.sub("", payload).strip(" ;,\n")
+
+    if search_only and mode != "SEARCH":
+        return MemoryRequest(mode="SEARCH", query=default_query, top_k=default_top_k, raw_text=raw)
 
     if mode == "GET":
         address_match = re.search(r"<PTR_0x[0-9A-Fa-f]+>(?::\d+)?", payload)
@@ -60,7 +64,7 @@ def build_memory_request_prompt(
     default_top_k: int = 1,
     policy: str = "auto",
 ) -> str:
-    if policy == "require-search":
+    if policy in {"require-search", "search-only"}:
         task_block = f"[Current Task]\n{task_query or role_prompt}\n\n"
         instruction = (
             "You must request memory before answering. Return exactly one line:\n"

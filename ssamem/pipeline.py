@@ -196,11 +196,20 @@ class PointerDrivenSSAMemPipeline:
         default_top_k: int = 1,
         memory_request_policy: str = "auto",
     ) -> MASExecutionTrace:
+        if memory_request_policy in {"require-search", "search-only"}:
+            protocol = (
+                "The MAS agent must explicitly request memory before answering. "
+                "Only SEARCH is allowed in this evaluation; do not use GET."
+            )
+        else:
+            protocol = (
+                "The MAS agent must explicitly request memory before answering. "
+                "Use SEARCH when it only knows a summary key; use GET for exact addresses."
+            )
         pointer_table_context = (
             f"{self.pointer_table_context(max_entries=pointer_table_max_entries)}\n\n"
             "[Memory Agent Protocol]\n"
-            "The MAS agent must explicitly request memory before answering. "
-            "Use SEARCH when it only knows a summary key; use GET for exact addresses."
+            f"{protocol}"
         )
         return self.userspace.run_multi_agent_task_with_memory_actions(
             task_description=task_description,

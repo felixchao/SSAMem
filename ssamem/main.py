@@ -29,6 +29,7 @@ from ssamem.commands.mas import (
     run_eval_mas_memory_search,
     run_query_memory_agent,
 )
+from ssamem.commands.retrieval import run_eval_retrieval, run_train_retrieval
 from ssamem.commands.training import run_train_lmpo_projector, run_train_pointer_dpo, run_train_ssa
 from ssamem.config import RunConfig
 
@@ -49,6 +50,8 @@ COMMAND_HANDLERS = {
     "build-ssa-data": run_build_ssa_data,
     "prepare-ssa-traces": run_prepare_ssa_traces,
     "train-ssa": run_train_ssa,
+    "train-retrieval": run_train_retrieval,
+    "eval-retrieval": run_eval_retrieval,
     "collect-dpo-prefs": run_collect_dpo_prefs,
     "train-pointer-dpo": run_train_pointer_dpo,
     "eval-training": run_eval_training,
