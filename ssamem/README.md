@@ -1,201 +1,154 @@
-# Pointer-Driven SSAMem
+# SSAMem
 
-`ssamem` is a standalone pipeline for pointer-driven latent communication in
-multi-agent systems. It does not depend on the original `latentmem` package.
+`ssamem` is a pointer-driven latent memory system for multi-agent systems
+(MAS). It combines:
 
-## What Is Included
+- a trained composer/projector for latent memory injection
+- a trained query-to-memory retriever for SEARCH
+- a pointer table and clustered experience bank
+- a MAS execution loop that requests memory before answering
+
+This package is the implementation of the SSAMem pipeline inside this repo.
+
+## Method Overview
+
+SSAMem treats memory as past MAS trajectories rather than plain supporting
+documents.
+
+The current pipeline has four major stages:
+
+```text
+1. Collect text MAS trajectories
+2. Convert them into SSA latent data
+3. Train:
+   - composer/projector
+   - retrieval key encoders
+4. Build a clustered latent experience bank and run MAS with MemoryAgent SEARCH
+```
+
+At inference time:
+
+```text
+task query
+-> MAS role issues SEARCH
+-> MemoryAgent retrieves top-k latent memories
+-> composer/projector mounts latent tensors into the role prompt
+-> role answers using injected latent memory
+```
+
+## Core Architecture
+
+SSAMem separates retrieval from injection.
+
+### Retrieval path
+
+- `QueryLatentEncoder`
+  - encodes a task prompt into a retrieval query key
+- `MemoryKeyEncoder`
+  - encodes a stored trajectory latent into a memory key
+- `MemoryAgent SEARCH`
+  - compares query keys against memory keys and returns top-k memory addresses
+
+### Injection path
+
+- `composer / projector`
+  - converts a trajectory latent into a prompt-mountable latent tensor
+- `UserSpaceMAS`
+  - injects mounted latent tensors into the LLM as soft prompts
+- `MAS roles`
+  - answer with latent memory already mounted
+
+This means each memory page has two representations:
+
+- `key_vector`
+  - used for SEARCH
+- `tensor_data`
+  - used for latent prompt injection
+
+## Pointer Table and Experience Clusters
+
+The experience bank is organized as:
+
+```text
+summary key -> pointer -> cluster -> indexed latent memories
+```
+
+Each cluster stores:
+
+- one pointer, such as `<PTR_0x017>`
+- multiple latent memories
+- exact addresses, such as `<PTR_0x017>:0007`
+
+The pointer table provides a coarse summary-key view of the bank, while exact
+addresses provide fine-grained memory access.
+
+
+
+## Main Modules
 
 - `cli/`
-  - CLI argument parser for `python -m ssamem`.
+  - parser for `python -m ssamem`
 - `commands/`
-  - Thin command handlers grouped by responsibility: data preparation,
-    training, evaluation, MAS memory evaluation, and demos.
+  - command handlers grouped by domain
 - `workflows/`
-  - Higher-level runnable flows used by CLI commands, including demo runs,
-    text-MAS trajectory collection, experience-bank preload, and MAS memory
-    evaluation.
+  - higher-level experiment and evaluation flows
+- `retrieval_training/`
+  - query/memory retrieval alignment training
 - `training/`
-  - SSA trace/data conversion, manifest utilities, distillation, probing, and
-    LMPO-style preference-tuning utilities.
-- `data_models.py`
-  - `LatentTensor`, `PageTable`, `AgentMessage`, and kernel-side result types.
+  - SSA dataset, manifest, and distillation code
 - `userspace.py`
-  - `UserSpaceMAS`, the public user-space entry that directly hosts MAS role
-    execution and internally performs soft-prompt injection with
-    `LlamaForCausalLM`.
+  - MAS execution loop and latent prompt mounting
 - `kernelspace.py`
-  - `MemoryAgent`, `IPCBus`, and `OSKernel` for pointer resolution, MIPS
-    retrieval, and episodic consolidation.
-- `trainingspace.py` and `ssa_data.py`
-  - Backward-compatible import shims. New code should prefer
-    `ssamem.training.space` and `ssamem.training.data`.
+  - memory store, pointer table, clustering, SEARCH, GET
 - `pipeline.py`
-  - A top-level orchestrator that connects kernel-space and user-space.
-- `mas.py`
-  - MAS role specifications, topology registry, and prompt binding logic for
-    `camel`, `autogen`, and `debate/macnet`.
-- `mas_prompts/`
-  - Task-domain prompt libraries migrated from `latentmem/mas_core` for
-    `alfworld`, `triviaqa`, `popqa`, `pddl`, and `kodcode`.
-- `tokenizer.py`
-  - A tiny offline tokenizer for fully local demos.
-- `main.py`
-  - Minimal CLI entrypoint, dependency guard, and command dispatcher.
+  - top-level system wiring across userspace and kernelspace
+- `memory_actions.py`
+  - parsing and enforcing SEARCH/GET/NONE behavior
 
-## Quick Start
+## Key Commands
 
-Run an offline end-to-end user-space demo with a tiny randomly initialized
-Llama:
+### Collect text trajectories
 
 ```bash
-cd LatentMem
-python3 -m ssamem demo
+python -m ssamem collect-text-mas-trajectories ...
 ```
 
-Run a minimal SSA alignment demo:
+### Build SSA latent data
 
 ```bash
-cd LatentMem
-python3 -m ssamem train-ssa --steps 3
+python -m ssamem build-ssa-data ...
 ```
 
-Build SSA training data from MAS traces:
+### Train composer/projector
 
 ```bash
-python3 -m ssamem prepare-ssa-traces --source synthetic-api --limit 200 --output data/traces.synthetic.jsonl
-python3 -m ssamem build-ssa-data --input traces.jsonl --output data/ssa
+python -m ssamem train-ssa --config configs/ssamem_phaseA_trajectory_context_popqa2500_768_b4_answerstrong.yaml
 ```
 
-Convert a supported HuggingFace dataset into SSA traces when `datasets` can
-access the source:
+### Train retrieval encoders
 
 ```bash
-python3 -m ssamem prepare-ssa-traces --source hf --dataset-name kkkc6696/APIBench --limit 500 --output data/traces.apibench.jsonl
-python3 -m ssamem prepare-ssa-traces --source hf --dataset-name sentence-transformers/codesearchnet --subset pair --limit 500 --output data/traces.codesearchnet.jsonl
-python3 -m ssamem prepare-ssa-traces --source hf --dataset-name codeparrot/apps --limit 200 --output data/traces.apps.jsonl
+python -m ssamem train-retrieval ...
 ```
 
-Run config-driven SSA hidden-state alignment:
+### Evaluate retrieval alone
 
 ```bash
-python3 -m ssamem train-ssa --config configs/ssamem_ssa.yaml
+python -m ssamem eval-retrieval ...
 ```
 
-Collect pointer DPO preferences and train a pointer router:
+### Build the experience bank
 
 ```bash
-python3 -m ssamem collect-dpo-prefs --output data/pointer_prefs.jsonl
-python3 -m ssamem collect-dpo-prefs --input data/rollouts.jsonl --output data/pointer_prefs.jsonl
-python3 -m ssamem train-pointer-dpo --config configs/ssamem_dpo.yaml
+python -m ssamem build-experience-bank ...
 ```
 
-Rollout JSONL rows may either include direct `chosen`/`rejected` pointers or a
-`candidates` list with `{ "pointer": "<PTR_0x042>", "reward": 1.0 }` records.
-
-Evaluate training artifacts:
+### Evaluate the full MAS memory loop
 
 ```bash
-python3 -m ssamem eval-training --manifest data/ssa/manifest.jsonl --preferences data/pointer_prefs.jsonl
+python -m ssamem eval-mas-memory-agent-loop ...
 ```
 
-Run a MAS-style demo:
+See [TrainingGuide.md](/data1/JustinLu090/SSAMem/TrainingGuide.md) for the
+recommended end-to-end training and evaluation workflow.
 
-```bash
-cd LatentMem
-python3 -m ssamem demo-mas --mas-style camel
-```
-
-Run a domain-specific MAS demo with migrated prompt assets:
-
-```bash
-cd LatentMem
-python3 -m ssamem demo-mas --mas-style autogen --task-domain triviaqa
-```
-
-Run a minimal TriviaQA benchmark:
-
-```bash
-cd LatentMem
-python3 -m ssamem evaluate-triviaqa --limit 20
-```
-
-## Runtime Modes
-
-- `tiny-random`
-  - Fully offline. Builds a small random `LlamaForCausalLM` inside the
-    user-space runtime plus a local tokenizer. Useful for smoke tests.
-- `hf`
-  - Loads a HuggingFace model and tokenizer into the internal user-space
-    runtime from `model_name_or_path`.
-
-Core configuration is split into:
-
-- `RuntimeConfig`
-  - Controls the internal execution runtime used by `UserSpaceMAS`
-- `KernelConfig`
-  - Controls memory, retrieval, and persistence
-- `MASConfig`
-  - Controls the role topology and optional task-domain prompt pack exposed by
-    user-space
-
-## Persistence
-
-If `KernelConfig.storage_root` is set, memory state is persisted under that
-directory:
-
-- `page_table.json`
-  - Stores pointer-to-storage mappings and the next pointer index.
-- `latents/<storage_id>.pt`
-  - Stores each `LatentTensor` payload, key vector, utility score, pointer, and
-    metadata.
-
-The pipeline also exposes:
-
-- `save_memory_store()`
-- `load_memory_store()`
-
-When `autosave=True`, each newly registered or consolidated latent page is
-written to disk immediately. When `autoload=True`, persisted memory is restored
-when the pipeline starts.
-
-## MAS Orchestration
-
-`ssamem` now includes a mainstream role-based MAS layer inspired by the
-structures used in the original `latentmem` project:
-
-- `camel`
-  - `user_proxy -> actor -> critic -> summarizer`
-- `autogen`
-  - `assistant -> user_proxy`
-- `debate` / `macnet`
-  - two actor-critic branches followed by a summarizer
-
-Each role turn still uses the same latent pointer resolution and soft-prompt
-mounting path, but that execution detail is hidden inside `UserSpaceMAS`.
-
-## Example Flow
-
-1. Register latent memory pages in the kernel.
-2. Send an IPC message containing `<PTR_...>`.
-3. Kernel resolves explicit pointers and optionally prefetches more pages with
-   MIPS.
-4. User-space mounts the resolved tensors as soft prompts by prepending them to
-   `inputs_embeds`.
-5. Global reward can trigger episodic consolidation into new `LatentTensor`
-   pages.
-
-## TriviaQA Benchmark
-
-The built-in TriviaQA evaluator loads the raw
-`mandarjoshi/trivia_qa` `rc.wikipedia.nocontext` split directly, extracts a
-small evidence bundle, and compares three conditions:
-
-- `No Memory`
-  - Question only
-- `Text Memory`
-  - Evidence text injected directly into the prompt
-- `SSAMem`
-  - Evidence converted into a pseudo-latent tensor and mounted through a pointer
-
-This benchmark is intended as a first end-to-end evaluation harness for
-pointer-driven memory quality, retrieval behavior, and communication efficiency.
