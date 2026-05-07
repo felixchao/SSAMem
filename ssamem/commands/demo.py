@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from ssamem.commands.common import build_pipeline_from_args
+from ssamem.commands.builders import build_pipeline_from_args
 
 
 def run_demo(args) -> None:

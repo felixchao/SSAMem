@@ -2,14 +2,10 @@ from __future__ import annotations
 
 import json
 
-from ssamem.commands.common import (
-    _build_ssa_distiller_for_eval,
-    _write_json,
-    build_training_args_from_config,
-    deep_get,
-    load_config_file,
-    resolve_output_path,
-)
+from ssamem.commands.builders import build_ssa_distiller_for_eval
+from ssamem.commands.config_args import build_training_args_from_config
+from ssamem.utils.config import deep_get, load_config_file
+from ssamem.utils.io import resolve_output_path, write_json
 
 
 def _attach_retrieval_checkpoint(pipeline, args):
@@ -17,7 +13,6 @@ def _attach_retrieval_checkpoint(pipeline, args):
     if not checkpoint:
         return None
     import torch
-    from ssamem.retrieval import DenseInnerProductRetriever, RandomHyperplaneLSHIndex
     from ssamem.retrieval_training import (
         RetrievalAlignmentModel,
         RetrievalModelConfig,
@@ -29,14 +24,7 @@ def _attach_retrieval_checkpoint(pipeline, args):
     retrieval_model = RetrievalAlignmentModel(pipeline.userspace, retrieval_config).to(args.device)
     load_retrieval_checkpoint(retrieval_model, checkpoint, map_location=args.device)
     retrieval_model.eval()
-
-    key_dim = retrieval_config.key_dim
-    pipeline.kernel.memory_agent.key_dim = key_dim
-    pipeline.kernel.memory_agent.cluster_assignment_lsh = RandomHyperplaneLSHIndex(key_dim)
-    pipeline.kernel.retriever = DenseInnerProductRetriever(
-        query_encoder=retrieval_model.query_encoder,
-        lsh_index=RandomHyperplaneLSHIndex(key_dim),
-    )
+    pipeline.attach_trained_retriever(retrieval_model)
     return retrieval_model
 
 
@@ -52,7 +40,7 @@ def run_eval_mas_latent_memory(args) -> None:
     if not manifest_path:
         raise SystemExit("eval-mas-latent-memory requires --manifest or data.manifest in config.")
 
-    pipeline, distiller = _build_ssa_distiller_for_eval(args)
+    pipeline, distiller = build_ssa_distiller_for_eval(args)
     load_alignment_checkpoint(distiller, args.checkpoint, map_location=args.device)
     dataset = SSAManifestDataset(manifest_path, map_location=args.device)
     payload = evaluate_mas_latent_memory(
@@ -68,7 +56,7 @@ def run_eval_mas_latent_memory(args) -> None:
     )
     output_path = resolve_output_path(args)
     if output_path:
-        _write_json(output_path, payload)
+        write_json(output_path, payload)
         payload["output_path"] = output_path
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -112,11 +100,11 @@ def run_build_experience_bank(args) -> None:
     }
     output_path = resolve_output_path(args)
     if output_path:
-        _write_json(output_path, payload)
+        write_json(output_path, payload)
         payload["output_path"] = output_path
     pointer_table_path = getattr(args, "pointer_table_path", None)
     if pointer_table_path:
-        _write_json(pointer_table_path, {"pointer_table": pointer_rows})
+        write_json(pointer_table_path, {"pointer_table": pointer_rows})
         payload["pointer_table_path"] = pointer_table_path
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -155,7 +143,7 @@ def run_eval_mas_memory_search(args) -> None:
     )
     output_path = resolve_output_path(args)
     if output_path:
-        _write_json(output_path, payload)
+        write_json(output_path, payload)
         payload["output_path"] = output_path
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -196,7 +184,7 @@ def run_eval_mas_memory_agent_loop(args) -> None:
     )
     output_path = resolve_output_path(args)
     if output_path:
-        _write_json(output_path, payload)
+        write_json(output_path, payload)
         payload["output_path"] = output_path
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -274,6 +262,6 @@ def run_query_memory_agent(args) -> None:
 
     output_path = resolve_output_path(args)
     if output_path:
-        _write_json(output_path, payload)
+        write_json(output_path, payload)
         payload["output_path"] = output_path
     print(json.dumps(payload, ensure_ascii=False, indent=2))

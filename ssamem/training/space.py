@@ -17,7 +17,7 @@ from torch import nn
 from torch.utils.data import Dataset
 from transformers import GenerationConfig
 
-from ssamem.userspace import UserSpaceMAS
+from ssamem.core.userspace import UserSpaceMAS
 
 
 POINTER_TOKEN_PATTERN = re.compile(r"^<PTR_0x[0-9A-Fa-f]+>$")
@@ -102,6 +102,9 @@ class DistillationStepOutput:
     answer_loss: torch.Tensor | None = None
     preference_loss: torch.Tensor | None = None
     preference_margin: torch.Tensor | None = None
+    utility_loss: torch.Tensor | None = None
+    utility_margin_wrong: torch.Tensor | None = None
+    utility_margin_nomemory: torch.Tensor | None = None
 
 
 @dataclass
@@ -1774,6 +1777,38 @@ class LatentStudent(nn.Module):
                 sample_logprobs.append(shifted_log_probs[idx][finite_mask].mean())
         return torch.stack(sample_logprobs, dim=0)
 
+    def target_logprobs_without_memory(
+        self,
+        prompts: Sequence[str],
+        target_texts: Sequence[str],
+    ) -> torch.Tensor:
+        full_texts = [f"{prompt}{target}" for prompt, target in zip(prompts, target_texts)]
+        batch = self.userspace.prepare_soft_prompt_batch(
+            prompts=full_texts,
+            mounted_latents=[[] for _ in prompts],
+        )
+        label_tensor = self._target_label_tensor(batch, prompts)
+        outputs = self.userspace.model(
+            inputs_embeds=batch.inputs_embeds,
+            attention_mask=batch.attention_mask,
+            use_cache=False,
+            return_dict=True,
+        )
+        logits = outputs.logits[:, :-1, :].float().clamp(min=-80.0, max=80.0)
+        log_probs = logits.log_softmax(dim=-1)
+        shifted_labels = label_tensor[:, 1:]
+        target_mask = shifted_labels != -100
+        safe_labels = shifted_labels.masked_fill(~target_mask, 0)
+        shifted_log_probs = log_probs.gather(dim=-1, index=safe_labels.unsqueeze(-1)).squeeze(-1)
+        sample_logprobs = []
+        for idx in range(len(prompts)):
+            finite_mask = target_mask[idx] & torch.isfinite(shifted_log_probs[idx])
+            if not torch.any(finite_mask):
+                sample_logprobs.append(shifted_log_probs[idx].sum() * 0.0)
+            else:
+                sample_logprobs.append(shifted_log_probs[idx][finite_mask].mean())
+        return torch.stack(sample_logprobs, dim=0)
+
 
 class SSADistiller(nn.Module):
     def __init__(
@@ -1786,6 +1821,8 @@ class SSADistiller(nn.Module):
         answer_loss_weight: float = 0.0,
         preference_loss_weight: float = 0.0,
         preference_beta: float = 0.1,
+        utility_loss_weight: float = 0.0,
+        utility_margin: float = 0.2,
         train_teacher: bool = False,
     ) -> None:
         super().__init__()
@@ -1796,6 +1833,8 @@ class SSADistiller(nn.Module):
         self.answer_loss_weight = float(answer_loss_weight)
         self.preference_loss_weight = float(preference_loss_weight)
         self.preference_beta = float(preference_beta)
+        self.utility_loss_weight = float(utility_loss_weight)
+        self.utility_margin = float(utility_margin)
         self._shared_backbone = self.teacher.userspace.model is self.student.userspace.model
         self.student_projection = nn.Linear(student.hidden_size, teacher.hidden_size)
         if student.hidden_size == teacher.hidden_size:
@@ -1841,6 +1880,9 @@ class SSADistiller(nn.Module):
         answer_loss = None
         preference_loss = None
         preference_margin = None
+        utility_loss = None
+        utility_margin_wrong = None
+        utility_margin_nomemory = None
         loss = hidden_loss
         if self.answer_loss_weight > 0.0 and batch.target_texts:
             answer_loss = self.student.answer_loss(
@@ -1870,6 +1912,43 @@ class SSADistiller(nn.Module):
             else:
                 preference_margin = raw_margin.detach().new_zeros(())
                 preference_loss = loss.detach().new_zeros(())
+        if self.utility_loss_weight > 0.0 and batch.target_texts and len(batch.latent_tensors) > 1:
+            positive_logprobs = self.student.target_logprobs(
+                prompts=prompts,
+                latent_tensors=batch.latent_tensors,
+                target_texts=batch.target_texts,
+            )
+            negative_latents = list(batch.latent_tensors[1:]) + [batch.latent_tensors[0]]
+            negative_logprobs = self.student.target_logprobs(
+                prompts=prompts,
+                latent_tensors=negative_latents,
+                target_texts=batch.target_texts,
+            )
+            no_memory_logprobs = self.student.target_logprobs_without_memory(
+                prompts=prompts,
+                target_texts=batch.target_texts,
+            )
+            raw_margin_wrong = positive_logprobs - negative_logprobs
+            raw_margin_nomemory = positive_logprobs - no_memory_logprobs
+            finite_mask = (
+                torch.isfinite(raw_margin_wrong)
+                & torch.isfinite(raw_margin_nomemory)
+            )
+            if torch.any(finite_mask):
+                utility_margin_wrong = raw_margin_wrong[finite_mask].clamp(min=-100.0, max=100.0)
+                utility_margin_nomemory = raw_margin_nomemory[finite_mask].clamp(min=-100.0, max=100.0)
+                utility_loss_wrong = -F.logsigmoid(
+                    self.preference_beta * (utility_margin_wrong - self.utility_margin)
+                ).mean()
+                utility_loss_nomemory = -F.logsigmoid(
+                    self.preference_beta * (utility_margin_nomemory - self.utility_margin)
+                ).mean()
+                utility_loss = 0.5 * (utility_loss_wrong + utility_loss_nomemory)
+                loss = loss + self.utility_loss_weight * utility_loss
+            else:
+                utility_margin_wrong = raw_margin_wrong.detach().new_zeros(())
+                utility_margin_nomemory = raw_margin_nomemory.detach().new_zeros(())
+                utility_loss = loss.detach().new_zeros(())
         latent_distance = torch.linalg.vector_norm(projected_student_hidden.detach() - teacher_hidden.detach(), dim=-1).mean()
         return DistillationStepOutput(
             loss=loss,
@@ -1880,6 +1959,9 @@ class SSADistiller(nn.Module):
             answer_loss=None if answer_loss is None else answer_loss.detach(),
             preference_loss=None if preference_loss is None else preference_loss.detach(),
             preference_margin=None if preference_margin is None else preference_margin.detach().mean(),
+            utility_loss=None if utility_loss is None else utility_loss.detach(),
+            utility_margin_wrong=None if utility_margin_wrong is None else utility_margin_wrong.detach().mean(),
+            utility_margin_nomemory=None if utility_margin_nomemory is None else utility_margin_nomemory.detach().mean(),
         )
 
     def fit(
@@ -1922,6 +2004,12 @@ class SSADistiller(nn.Module):
                     metrics["preference_loss"] = float(step_output.preference_loss.detach().cpu().item())
                 if step_output.preference_margin is not None:
                     metrics["preference_margin"] = float(step_output.preference_margin.detach().cpu().item())
+                if step_output.utility_loss is not None:
+                    metrics["utility_loss"] = float(step_output.utility_loss.detach().cpu().item())
+                if step_output.utility_margin_wrong is not None:
+                    metrics["utility_margin_wrong"] = float(step_output.utility_margin_wrong.detach().cpu().item())
+                if step_output.utility_margin_nomemory is not None:
+                    metrics["utility_margin_nomemory"] = float(step_output.utility_margin_nomemory.detach().cpu().item())
                 history.append(metrics)
                 if log_every > 0 and (global_step == 1 or global_step % log_every == 0):
                     metric_text = " ".join(f"{name}={value:.6g}" for name, value in metrics.items())

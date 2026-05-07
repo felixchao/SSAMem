@@ -9,14 +9,14 @@ from torch import nn
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, LlamaConfig, LlamaForCausalLM
 
 from ssamem.config import PipelineConfig, RuntimeConfig
-from ssamem.data_models import AgentMessage, MASExecutionTrace, MASTurn
-from ssamem.mas import DEFAULT_MEMORY_CONTENT, build_mas_topology
-from ssamem.memory_actions import (
+from ssamem.core.mas import DEFAULT_MEMORY_CONTENT, build_mas_topology
+from ssamem.core.memory_actions import (
     build_answer_prompt,
     build_memory_request_prompt,
     format_memory_observation,
     parse_memory_request,
 )
+from ssamem.data_models import AgentMessage, MASExecutionTrace, MASTurn
 from ssamem.tokenizer import SimpleTokenizer
 
 

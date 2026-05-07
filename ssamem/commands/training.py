@@ -3,15 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ssamem.commands.common import (
-    _write_json,
-    build_pipeline_from_args,
-    build_synthetic_ssa_batches,
-    build_training_args_from_config,
-    deep_get,
-    load_config_file,
-    summarize_metric_history,
-)
+from ssamem.commands.builders import build_pipeline_from_args, build_synthetic_ssa_batches
+from ssamem.commands.config_args import build_training_args_from_config
+from ssamem.utils.config import deep_get, load_config_file
+from ssamem.utils.io import write_json
+from ssamem.utils.metrics import summarize_metric_history
 
 
 def run_train_ssa(args) -> None:
@@ -65,6 +61,8 @@ def run_train_ssa(args) -> None:
         answer_loss_weight=float(alignment_cfg.get("answer_loss_weight", 0.0)),
         preference_loss_weight=float(alignment_cfg.get("preference_loss_weight", 0.0)),
         preference_beta=float(alignment_cfg.get("preference_beta", 0.1)),
+        utility_loss_weight=float(alignment_cfg.get("utility_loss_weight", 0.0)),
+        utility_margin=float(alignment_cfg.get("utility_margin", 0.2)),
     )
     if getattr(args, "checkpoint", None):
         load_alignment_checkpoint(distiller, args.checkpoint, map_location=args.device)
@@ -102,8 +100,8 @@ def run_train_ssa(args) -> None:
         history_path = str(Path(output_path).with_suffix(".history.json"))
     history_summary = summarize_metric_history(losses)
     if history_path:
-        _write_json(history_path, {"history": losses, "summary": history_summary})
-        _write_json(str(Path(history_path).with_suffix(".summary.json")), history_summary)
+        write_json(history_path, {"history": losses, "summary": history_summary})
+        write_json(str(Path(history_path).with_suffix(".summary.json")), history_summary)
     if hasattr(pipeline.userspace.model, "save_pretrained") and deep_get(config, "training.adapter_output_dir"):
         pipeline.userspace.model.save_pretrained(deep_get(config, "training.adapter_output_dir"))
     print(
@@ -224,7 +222,7 @@ def run_train_lmpo_projector(args) -> None:
         student_projection_state=student_distiller.student_projection.state_dict(),
     )
     history_path = str(Path(args.output_path).with_suffix(".history.json"))
-    _write_json(history_path, {"history": payload["history"], "summary": payload["summary"]})
+    write_json(history_path, {"history": payload["history"], "summary": payload["summary"]})
     payload.pop("history", None)
     payload.update(
         {

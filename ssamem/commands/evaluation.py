@@ -4,15 +4,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ssamem.commands.common import (
-    _build_ssa_distiller_for_eval,
-    _write_json,
-    build_pipeline_from_args,
-    build_training_args_from_config,
-    deep_get,
-    load_config_file,
-    resolve_output_path,
-)
+from ssamem.commands.builders import build_pipeline_from_args, build_ssa_distiller_for_eval
+from ssamem.commands.config_args import build_training_args_from_config
+from ssamem.utils.config import deep_get, load_config_file
+from ssamem.utils.io import resolve_output_path, write_json
 
 
 def run_eval_training(args) -> None:
@@ -77,7 +72,7 @@ def run_eval_ssa_report(args) -> None:
         raise SystemExit("eval-ssa-report requires --manifest or data.manifest in config.")
 
     dataset = SSAManifestDataset(manifest_path, map_location=args.device)
-    _, baseline_distiller = _build_ssa_distiller_for_eval(args)
+    _, baseline_distiller = build_ssa_distiller_for_eval(args)
     baseline = evaluate_ssa_latent_distances(distiller=baseline_distiller, dataset=dataset, limit=args.limit)
 
     payload: dict[str, Any] = {
@@ -88,7 +83,7 @@ def run_eval_ssa_report(args) -> None:
     }
     checkpoint_path = getattr(args, "checkpoint", None) or deep_get(config, "training.output_path")
     if checkpoint_path:
-        _, trained_distiller = _build_ssa_distiller_for_eval(args)
+        _, trained_distiller = build_ssa_distiller_for_eval(args)
         load_alignment_checkpoint(trained_distiller, checkpoint_path, map_location=args.device)
         checkpoint_metrics = evaluate_ssa_latent_distances(distiller=trained_distiller, dataset=dataset, limit=args.limit)
         baseline_mean = float(baseline["summary"]["latent_distance"]["mean"])
@@ -108,7 +103,7 @@ def run_eval_ssa_report(args) -> None:
         )
     output_path = resolve_output_path(args)
     if output_path:
-        _write_json(output_path, payload)
+        write_json(output_path, payload)
         payload["output_path"] = output_path
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -121,7 +116,7 @@ def run_probe_ssa_generation(args) -> None:
     if not manifest_path:
         raise SystemExit("probe-ssa-generation requires --manifest or data.manifest in config.")
     checkpoint_path = getattr(args, "checkpoint", None) or deep_get(config, "training.output_path")
-    pipeline, distiller = _build_ssa_distiller_for_eval(args)
+    pipeline, distiller = build_ssa_distiller_for_eval(args)
     if checkpoint_path:
         load_alignment_checkpoint(distiller, checkpoint_path, map_location=args.device)
     dataset = SSAManifestDataset(manifest_path, map_location=args.device)
@@ -138,7 +133,7 @@ def run_probe_ssa_generation(args) -> None:
     payload["checkpoint_loaded"] = bool(checkpoint_path)
     output_path = resolve_output_path(args)
     if output_path:
-        _write_json(output_path, payload)
+        write_json(output_path, payload)
         payload["output_path"] = output_path
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -157,7 +152,7 @@ def run_collect_lmpo_rollouts(args) -> None:
     checkpoint_path = getattr(args, "checkpoint", None) or deep_get(config, "training.output_path")
     if not checkpoint_path:
         raise SystemExit("collect-lmpo-rollouts requires --checkpoint or training.output_path in config.")
-    pipeline, distiller = _build_ssa_distiller_for_eval(args)
+    pipeline, distiller = build_ssa_distiller_for_eval(args)
     load_alignment_checkpoint(distiller, checkpoint_path, map_location=args.device)
     dataset = SSAManifestDataset(manifest_path, map_location=args.device)
     payload = collect_single_latent_lmpo_rollouts(
@@ -268,7 +263,7 @@ def run_ssa_suite(args) -> None:
         test_ratio=args.test_ratio,
         seed=args.seed,
     )
-    _write_json(reports_dir / "split_summary.json", split_payload)
+    write_json(reports_dir / "split_summary.json", split_payload)
 
     train_manifest = split_payload["splits"]["train"]["manifest"]
     val_manifest = split_payload["splits"]["val"]["manifest"]
@@ -315,7 +310,7 @@ def run_ssa_suite(args) -> None:
     if hasattr(pipeline.userspace.model, "save_pretrained"):
         adapter_dir = checkpoints_dir / "adapter"
         pipeline.userspace.model.save_pretrained(adapter_dir)
-    _write_json(
+    write_json(
         reports_dir / "train_history.json",
         {
             "history": history,
@@ -348,8 +343,8 @@ def run_ssa_suite(args) -> None:
 
     val_report = _paired_report("val", val_manifest)
     test_report = _paired_report("test", test_manifest)
-    _write_json(reports_dir / "val_report.json", val_report)
-    _write_json(reports_dir / "test_report.json", test_report)
+    write_json(reports_dir / "val_report.json", val_report)
+    write_json(reports_dir / "test_report.json", test_report)
 
     val_probe = probe_ssa_generation(
         userspace=pipeline.userspace,
@@ -365,8 +360,8 @@ def run_ssa_suite(args) -> None:
         max_new_tokens=getattr(args, "max_new_tokens", 48),
         max_keywords=args.max_keywords,
     )
-    _write_json(reports_dir / "val_probe.json", val_probe)
-    _write_json(reports_dir / "test_probe.json", test_probe)
+    write_json(reports_dir / "val_probe.json", val_probe)
+    write_json(reports_dir / "test_probe.json", test_probe)
 
     summary = {
         "suite_dir": str(suite_root),
@@ -386,7 +381,7 @@ def run_ssa_suite(args) -> None:
         },
     }
     summary_path = args.output_path or (suite_root / "suite_summary.json")
-    _write_json(summary_path, summary)
+    write_json(summary_path, summary)
     summary["output_path"] = str(summary_path)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 

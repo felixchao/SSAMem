@@ -9,11 +9,11 @@ import torch
 
 from ssamem.config import KernelConfig, PipelineConfig, RuntimeConfig
 from ssamem.data_models import AgentMessage
-from ssamem.kernelspace import IPCBus, MemoryAgent
-from ssamem.memory_actions import parse_memory_request
-from ssamem.pipeline import PointerDrivenSSAMemPipeline
+from ssamem.core.kernelspace import IPCBus, MemoryAgent
+from ssamem.core.memory_actions import parse_memory_request
+from ssamem.core.pipeline import PointerDrivenSSAMemPipeline
 from ssamem.retrieval import HashEmbeddingEncoder, RandomHyperplaneLSHIndex, DenseInnerProductRetriever
-from ssamem.trainingspace import (
+from ssamem.training.space import (
     SSABatch,
     SSADistiller,
     SSAManifestDataset,
@@ -33,7 +33,7 @@ from ssamem.trainingspace import (
     ssa_collate,
     split_ssa_manifest,
 )
-from ssamem.ssa_data import _record_from_agent_trajectory, _record_from_kodcode, _record_from_popqa
+from ssamem.training.data import _record_from_agent_trajectory, _record_from_kodcode, _record_from_popqa
 
 
 def build_tiny_pipeline() -> PointerDrivenSSAMemPipeline:

@@ -10,6 +10,30 @@
 
 This package is the implementation of the SSAMem pipeline inside this repo.
 
+## Current Package Layout
+
+The runtime architecture is now grouped under:
+
+```text
+ssamem/core/
+  pipeline.py
+  userspace.py
+  kernelspace.py
+  mas.py
+  memory_actions.py
+```
+
+Supporting packages:
+
+```text
+ssamem/training/            # SSA and composer/projector training
+ssamem/retrieval_training/  # retrieval alignment training
+ssamem/commands/            # command handlers
+ssamem/cli/                 # CLI parser registration
+ssamem/utils/               # config / io / metrics helpers
+ssamem/workflows/           # higher-level experiment flows
+```
+
 ## Method Overview
 
 SSAMem treats memory as past MAS trajectories rather than plain supporting
@@ -96,14 +120,29 @@ addresses provide fine-grained memory access.
   - query/memory retrieval alignment training
 - `training/`
   - SSA dataset, manifest, and distillation code
-- `userspace.py`
+- `core/userspace.py`
   - MAS execution loop and latent prompt mounting
-- `kernelspace.py`
+- `core/kernelspace.py`
   - memory store, pointer table, clustering, SEARCH, GET
-- `pipeline.py`
+- `core/pipeline.py`
   - top-level system wiring across userspace and kernelspace
-- `memory_actions.py`
+- `core/memory_actions.py`
   - parsing and enforcing SEARCH/GET/NONE behavior
+- `core/mas.py`
+  - MAS topology, role templates, and prompt rendering
+
+## Runtime Layering
+
+The end-to-end runtime can be read as:
+
+```text
+task query
+-> core/pipeline.py
+-> core/userspace.py asks for memory or runs a role turn
+-> core/kernelspace.py resolves SEARCH / GET
+-> retrieved latent memory is mounted back into userspace
+-> MAS role continues and produces the final answer
+```
 
 ## Key Commands
 
@@ -151,4 +190,3 @@ python -m ssamem eval-mas-memory-agent-loop ...
 
 See [TrainingGuide.md](/data1/JustinLu090/SSAMem/TrainingGuide.md) for the
 recommended end-to-end training and evaluation workflow.
-

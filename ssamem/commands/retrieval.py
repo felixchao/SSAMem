@@ -3,14 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ssamem.commands.common import (
-    _write_json,
-    build_pipeline_from_args,
-    build_training_args_from_config,
-    deep_get,
-    load_config_file,
-    summarize_metric_history,
-)
+from ssamem.commands.builders import build_pipeline_from_args
+from ssamem.commands.config_args import build_training_args_from_config
+from ssamem.utils.config import deep_get, load_config_file
+from ssamem.utils.io import write_json
+from ssamem.utils.metrics import summarize_metric_history
 
 
 def _apply_retrieval_config(args, config: dict):
@@ -136,8 +133,8 @@ def run_train_retrieval(args) -> None:
     if history_path is None:
         history_path = str(Path(output_path).with_suffix(".history.json"))
     summary = summarize_metric_history(history)
-    _write_json(history_path, {"history": history, "summary": summary, "eval": eval_payload})
-    _write_json(str(Path(history_path).with_suffix(".summary.json")), summary)
+    write_json(history_path, {"history": history, "summary": summary, "eval": eval_payload})
+    write_json(str(Path(history_path).with_suffix(".summary.json")), summary)
 
     print(
         json.dumps(
@@ -216,6 +213,6 @@ def run_eval_retrieval(args) -> None:
         "temperature": model.config.temperature,
     }
     if args.output_path:
-        _write_json(args.output_path, payload)
+        write_json(args.output_path, payload)
         payload["output_path"] = args.output_path
     print(json.dumps(payload, ensure_ascii=False, indent=2))

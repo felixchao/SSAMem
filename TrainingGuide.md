@@ -16,6 +16,29 @@ task QA rows
 The key design choice is that SSAMem stores past MAS trajectories as memory.
 The bank does not store plain text QA context as its primary memory object.
 
+## 0. Current Code Layout
+
+The current runtime architecture lives under:
+
+```text
+ssamem/core/
+  pipeline.py
+  userspace.py
+  kernelspace.py
+  mas.py
+  memory_actions.py
+```
+
+Useful supporting packages:
+
+```text
+ssamem/training/            # composer / projector / SSA training
+ssamem/retrieval_training/  # retrieval encoder training
+ssamem/commands/            # command handlers
+ssamem/cli/                 # CLI parser registration
+ssamem/utils/               # config / io / metric helpers
+```
+
 ## 1. What Each Stage Trains
 
 There are two trainable components:
@@ -51,6 +74,24 @@ PopQA rows
 
 `train-ssa` and `train-retrieval` both consume the SSA manifest and latent
 shards produced by `build-ssa-data`.
+
+At inference/runtime, the path is:
+
+```text
+ssamem/core/pipeline.py
+-> ssamem/core/userspace.py
+-> ssamem/core/kernelspace.py
+-> ssamem/core/memory_actions.py
+```
+
+In other words:
+
+- `userspace`
+  - runs the MAS roles and mounts latent memory into prompts
+- `kernelspace`
+  - manages the memory bank, pointer table, clusters, SEARCH, and GET
+- `pipeline`
+  - orchestrates userspace + kernelspace into one runtime loop
 
 ## 3. Prepare Task Input
 
@@ -135,6 +176,12 @@ Recommended config:
 configs/ssamem_phaseA_trajectory_context_popqa2500_768_b4_answerstrong.yaml
 ```
 
+Utility-focused refinement config:
+
+```text
+configs/ssamem_phaseA_trajectory_context_popqa2500_768_b4_answerstrong_utility.yaml
+```
+
 Current recommended command:
 
 ```bash
@@ -166,6 +213,13 @@ Checkpoint example:
 ```text
 outputs/phaseA_popqa2500_768_b4_answerstrong/fold_00/distiller.pt
 ```
+
+The utility config adds a composer-oriented contrastive objective:
+
+- `utility_loss_weight`
+  - encourages `correct latent > wrong latent > no memory`
+- `utility_margin`
+  - required positive margin over wrong/no-memory baselines
 
 ## 7. Train the Retrieval Key Encoders
 

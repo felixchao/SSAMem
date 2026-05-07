@@ -1,1 +1,1 @@
-"""CLI command handlers split by responsibility."""
+"""CLI command handlers split into core runtime and tooling groups."""

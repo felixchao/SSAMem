@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from ssamem.userspace import UserSpaceMAS
+from ssamem.core.userspace import UserSpaceMAS
 
 
 @dataclass
